@@ -336,4 +336,107 @@ class Economy {
   }
 
   internal fun getLedger(): Ledger = ledger
+
+  internal fun commit(transaction: Transaction) {
+    write {
+      val pendingDeltas = mutableMapOf<AccountId, MutableList<Pair<EconomicValue, Boolean>>>()
+
+      for (movement in transaction.movements) {
+        val value = movement.value
+        when (value) {
+          is EconomicValue.Monetary -> {
+            require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+              "Economic value quantity must be non-negative"
+            }
+          }
+
+          is EconomicValue.Resource -> {
+            require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+              "Economic value quantity must be non-negative"
+            }
+          }
+        }
+
+        if (movement.from != null) {
+          requireAccount(movement.from)
+          pendingDeltas.getOrPut(movement.from) { mutableListOf() }.add(value to false)
+        }
+        if (movement.to != null) {
+          requireAccount(movement.to)
+          pendingDeltas.getOrPut(movement.to) { mutableListOf() }.add(value to true)
+        }
+      }
+
+      val projected = mutableMapOf<AccountId, Balance>()
+      for ((accountId, deltas) in pendingDeltas) {
+        val account = requireAccount(accountId)
+        val current = account.balance()
+        val moneys = current.moneys.toMutableMap()
+        val resources = current.resources.toMutableMap()
+
+        for ((value, add) in deltas) {
+          when (value) {
+            is EconomicValue.Monetary -> {
+              val currency = value.money.currency
+              val currentQty = moneys[currency] ?: Quantity.ZERO
+              val newQty = if (add) {
+                currentQty + value.money.quantity
+              } else {
+                require(currentQty >= value.money.quantity) {
+                  "Insufficient balance for ${currency.code} in account ${accountId.value}"
+                }
+                currentQty - value.money.quantity
+              }
+              if (newQty.isZero()) {
+                moneys.remove(currency)
+              } else {
+                moneys[currency] = newQty
+              }
+            }
+
+            is EconomicValue.Resource -> {
+              val resource = value.amount.resource
+              val currentQty = resources[resource] ?: Quantity.ZERO
+              val newQty = if (add) {
+                currentQty + value.amount.quantity
+              } else {
+                require(currentQty >= value.amount.quantity) {
+                  "Insufficient resource ${resource.type}:${resource.id} in account ${accountId.value}"
+                }
+                currentQty - value.amount.quantity
+              }
+              if (newQty.isZero()) {
+                resources.remove(resource)
+              } else {
+                resources[resource] = newQty
+              }
+            }
+          }
+        }
+        projected[accountId] = Balance(moneys.toMap(), resources.toMap())
+      }
+
+      for ((accountId, newBalance) in projected) {
+        val account = requireAccount(accountId)
+        for ((currency, _) in account.balance().moneys) {
+          if (currency !in newBalance.moneys) {
+            account.setMoney(currency, Quantity.ZERO)
+          }
+        }
+        for ((resource, _) in account.balance().resources) {
+          if (resource !in newBalance.resources) {
+            account.setResource(resource, Quantity.ZERO)
+          }
+        }
+        for ((currency, qty) in newBalance.moneys) {
+          account.setMoney(currency, qty)
+        }
+        for ((resource, qty) in newBalance.resources) {
+          account.setResource(resource, qty)
+        }
+      }
+
+      ledger.append(transaction)
+    }
+  }
 }
