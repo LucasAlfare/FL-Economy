@@ -3,6 +3,7 @@
 package com.lucasalfare.fleconomy
 
 import java.math.BigDecimal
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
@@ -174,9 +175,98 @@ data class ResourceAmount(val resource: ResourceRef, val quantity: Quantity) : C
   }
 }
 
+sealed class EconomicValue {
+  data class Monetary(val money: Money) : EconomicValue()
+  data class Resource(val amount: ResourceAmount) : EconomicValue()
+
+  companion object {
+    fun of(money: Money): EconomicValue = Monetary(money)
+    fun of(amount: ResourceAmount): EconomicValue = Resource(amount)
+  }
+}
+
+data class Balance(
+  val moneys: Map<Currency, Quantity>,
+  val resources: Map<ResourceRef, Quantity>
+) {
+  fun moneyOf(currency: Currency): Quantity = moneys[currency] ?: Quantity.ZERO
+
+  fun resourceOf(resource: ResourceRef): Quantity = resources[resource] ?: Quantity.ZERO
+
+  fun isEmpty(): Boolean = moneys.isEmpty() && resources.isEmpty()
+
+  companion object {
+    val EMPTY = Balance(emptyMap(), emptyMap())
+  }
+}
+
+class Account internal constructor(val id: AccountId) {
+  private val moneys = mutableMapOf<Currency, Quantity>()
+  private val resources = mutableMapOf<ResourceRef, Quantity>()
+
+  fun balance(): Balance {
+    return Balance(
+      moneys = moneys.toMap(),
+      resources = resources.toMap()
+    )
+  }
+
+  internal fun getMoney(currency: Currency): Quantity = moneys[currency] ?: Quantity.ZERO
+
+  internal fun getResource(resource: ResourceRef): Quantity = resources[resource] ?: Quantity.ZERO
+
+  internal fun setMoney(currency: Currency, quantity: Quantity) {
+    if (quantity.isZero()) {
+      moneys.remove(currency)
+    } else {
+      moneys[currency] = quantity
+    }
+  }
+
+  internal fun setResource(resource: ResourceRef, quantity: Quantity) {
+    if (quantity.isZero()) {
+      resources.remove(resource)
+    } else {
+      resources[resource] = quantity
+    }
+  }
+
+  internal fun addMoney(money: Money) {
+    val current = getMoney(money.currency)
+    setMoney(money.currency, current + money.quantity)
+  }
+
+  internal fun subtractMoney(money: Money) {
+    val current = getMoney(money.currency)
+    setMoney(money.currency, current - money.quantity)
+  }
+
+  internal fun addResource(amount: ResourceAmount) {
+    val current = getResource(amount.resource)
+    setResource(amount.resource, current + amount.quantity)
+  }
+
+  internal fun subtractResource(amount: ResourceAmount) {
+    val current = getResource(amount.resource)
+    setResource(amount.resource, current - amount.quantity)
+  }
+
+  internal fun apply(value: EconomicValue, add: Boolean) {
+    when (value) {
+      is EconomicValue.Monetary -> {
+        if (add) addMoney(value.money) else subtractMoney(value.money)
+      }
+      is EconomicValue.Resource -> {
+        if (add) addResource(value.amount) else subtractResource(value.amount)
+      }
+    }
+  }
+}
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
+  private val accounts = ConcurrentHashMap<AccountId, Account>()
 
   internal fun nextOperationId(): OperationId {
     return OperationId(operationIdGenerator.incrementAndGet().toString())
@@ -188,5 +278,35 @@ class Economy {
 
   internal fun <T> write(block: () -> T): T {
     return lock.write { block() }
+  }
+
+  fun createAccount(id: AccountId): Account {
+    return write {
+      if (accounts.containsKey(id)) {
+        throw IllegalArgumentException("Account already exists: ${id.value}")
+      }
+      val account = Account(id)
+      accounts[id] = account
+      account
+    }
+  }
+
+  fun getAccount(id: AccountId): Account? {
+    return read { accounts[id] }
+  }
+
+  fun accountExists(id: AccountId): Boolean {
+    return read { accounts.containsKey(id) }
+  }
+
+  fun balanceOf(id: AccountId): Balance {
+    return read {
+      val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
+      account.balance()
+    }
+  }
+
+  internal fun requireAccount(id: AccountId): Account {
+    return accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
   }
 }
