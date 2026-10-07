@@ -10,6 +10,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 
+/**
+ * Opaque identifier for an economic account.
+ *
+ * Accounts are pure economic points; the application assigns meaning
+ * (wallet, guild treasury, NPC, etc.).
+ *
+ * @property value Non-blank unique string identifier.
+ * @throws IllegalArgumentException if [value] is blank.
+ */
 @JvmInline
 value class AccountId(val value: String) {
   init {
@@ -17,6 +26,12 @@ value class AccountId(val value: String) {
   }
 }
 
+/**
+ * Opaque identifier for a committed economic transaction.
+ *
+ * @property value Non-blank unique string identifier.
+ * @throws IllegalArgumentException if [value] is blank.
+ */
 @JvmInline
 value class TransactionId(val value: String) {
   init {
@@ -24,6 +39,15 @@ value class TransactionId(val value: String) {
   }
 }
 
+/**
+ * Opaque identifier for a logical economic operation.
+ *
+ * Multiple [Transaction]s may share the same [OperationId] when they
+ * belong to the same higher-level business action.
+ *
+ * @property value Non-blank unique string identifier.
+ * @throws IllegalArgumentException if [value] is blank.
+ */
 @JvmInline
 value class OperationId(val value: String) {
   init {
@@ -31,6 +55,12 @@ value class OperationId(val value: String) {
   }
 }
 
+/**
+ * Opaque identifier for a loan.
+ *
+ * @property value Non-blank unique string identifier.
+ * @throws IllegalArgumentException if [value] is blank.
+ */
 @JvmInline
 value class LoanId(val value: String) {
   init {
@@ -38,14 +68,37 @@ value class LoanId(val value: String) {
   }
 }
 
+/**
+ * Non-negative arbitrary-precision quantity used for both money and resources.
+ *
+ * Never holds a negative value. Arithmetic operations that would produce
+ * a negative result throw [IllegalArgumentException].
+ *
+ * Equality and hashing ignore trailing zeros of the underlying [BigDecimal].
+ *
+ * @property value Underlying non-negative [BigDecimal].
+ */
 class Quantity private constructor(val value: BigDecimal) : Comparable<Quantity> {
 
   init {
     require(value >= BigDecimal.ZERO) { "Quantity cannot be negative" }
   }
 
+  /**
+   * Adds two quantities.
+   *
+   * @param other Quantity to add.
+   * @return New [Quantity] representing the sum.
+   */
   operator fun plus(other: Quantity): Quantity = Quantity(value + other.value)
 
+  /**
+   * Subtracts [other] from this quantity.
+   *
+   * @param other Quantity to subtract.
+   * @return New [Quantity] representing the difference.
+   * @throws IllegalArgumentException if the result would be negative.
+   */
   operator fun minus(other: Quantity): Quantity {
     val result = value - other.value
     require(result >= BigDecimal.ZERO) { "Subtraction would produce negative quantity" }
@@ -54,8 +107,10 @@ class Quantity private constructor(val value: BigDecimal) : Comparable<Quantity>
 
   override fun compareTo(other: Quantity): Int = value.compareTo(other.value)
 
+  /** Returns `true` when this quantity equals zero. */
   fun isZero(): Boolean = value.compareTo(BigDecimal.ZERO) == 0
 
+  /** Returns `true` when this quantity is strictly greater than zero. */
   fun isPositive(): Boolean = value > BigDecimal.ZERO
 
   override fun equals(other: Any?): Boolean {
@@ -69,16 +124,45 @@ class Quantity private constructor(val value: BigDecimal) : Comparable<Quantity>
   override fun toString(): String = value.toPlainString()
 
   companion object {
+    /** Zero quantity. */
     val ZERO: Quantity = Quantity(BigDecimal.ZERO)
 
+    /**
+     * Creates a [Quantity] from a [BigDecimal].
+     *
+     * @param value Non-negative amount.
+     * @throws IllegalArgumentException if [value] is negative.
+     */
     fun of(value: BigDecimal): Quantity = Quantity(value)
 
+    /**
+     * Creates a [Quantity] from a [Long].
+     *
+     * @param value Non-negative amount.
+     * @throws IllegalArgumentException if [value] is negative.
+     */
     fun of(value: Long): Quantity = Quantity(BigDecimal.valueOf(value))
 
+    /**
+     * Creates a [Quantity] from a decimal string.
+     *
+     * @param value Non-negative decimal representation.
+     * @throws NumberFormatException if [value] is not a valid decimal.
+     * @throws IllegalArgumentException if the parsed value is negative.
+     */
     fun of(value: String): Quantity = Quantity(BigDecimal(value))
   }
 }
 
+/**
+ * Opaque currency code.
+ *
+ * The library treats currencies as opaque identifiers; it never performs
+ * automatic conversion between different currencies.
+ *
+ * @property code Non-blank currency identifier (e.g. "GOLD", "USD").
+ * @throws IllegalArgumentException if [code] is blank.
+ */
 @JvmInline
 value class Currency(val code: String) {
   init {
@@ -86,42 +170,106 @@ value class Currency(val code: String) {
   }
 }
 
+/**
+ * Monetary amount consisting of a non-negative [Quantity] and a [Currency].
+ *
+ * Arithmetic and comparison are only defined between amounts of the same currency.
+ *
+ * @property quantity Non-negative amount.
+ * @property currency Currency of the amount.
+ */
 data class Money(val quantity: Quantity, val currency: Currency) : Comparable<Money> {
 
   init {
     require(quantity.value >= BigDecimal.ZERO)
   }
 
+  /**
+   * Adds two monetary amounts of the same currency.
+   *
+   * @param other Amount to add.
+   * @return Sum of the two amounts.
+   * @throws IllegalArgumentException if currencies differ.
+   */
   operator fun plus(other: Money): Money {
     require(currency == other.currency) { "Cannot add Money of different currencies: $currency and ${other.currency}" }
     return Money(quantity + other.quantity, currency)
   }
 
+  /**
+   * Subtracts [other] from this amount (same currency required).
+   *
+   * @param other Amount to subtract.
+   * @return Difference of the two amounts.
+   * @throws IllegalArgumentException if currencies differ or the result would be negative.
+   */
   operator fun minus(other: Money): Money {
     require(currency == other.currency) { "Cannot subtract Money of different currencies: $currency and ${other.currency}" }
     return Money(quantity - other.quantity, currency)
   }
 
+  /**
+   * Compares two monetary amounts of the same currency.
+   *
+   * @param other Amount to compare with.
+   * @return Negative, zero or positive integer according to natural order.
+   * @throws IllegalArgumentException if currencies differ.
+   */
   override fun compareTo(other: Money): Int {
     require(currency == other.currency) { "Cannot compare Money of different currencies: $currency and ${other.currency}" }
     return quantity.compareTo(other.quantity)
   }
 
+  /** Returns `true` when the quantity is zero. */
   fun isZero(): Boolean = quantity.isZero()
 
+  /** Returns `true` when the quantity is strictly positive. */
   fun isPositive(): Boolean = quantity.isPositive()
 
   companion object {
+    /**
+     * Creates a [Money] instance from a [BigDecimal] amount.
+     *
+     * @param amount Non-negative amount.
+     * @param currency Currency of the amount.
+     */
     fun of(amount: BigDecimal, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
+    /**
+     * Creates a [Money] instance from a [Long] amount.
+     *
+     * @param amount Non-negative amount.
+     * @param currency Currency of the amount.
+     */
     fun of(amount: Long, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
+    /**
+     * Creates a [Money] instance from a decimal string.
+     *
+     * @param amount Non-negative decimal representation.
+     * @param currency Currency of the amount.
+     */
     fun of(amount: String, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
+    /**
+     * Returns a zero-valued [Money] for the given currency.
+     *
+     * @param currency Currency of the zero amount.
+     */
     fun zero(currency: Currency): Money = Money(Quantity.ZERO, currency)
   }
 }
 
+/**
+ * Opaque reference to a non-monetary resource.
+ *
+ * The library never interprets the meaning of [type] or [id]; they are
+ * treated as pure identifiers supplied by the application.
+ *
+ * @property type Non-blank resource type (e.g. "sword", "house", "wood").
+ * @property id Non-blank resource identifier within that type.
+ * @throws IllegalArgumentException if either field is blank.
+ */
 data class ResourceRef(val type: String, val id: String) {
   init {
     require(type.isNotBlank()) { "Resource type cannot be blank" }
@@ -129,79 +277,204 @@ data class ResourceRef(val type: String, val id: String) {
   }
 }
 
+/**
+ * Quantity of a specific non-monetary resource.
+ *
+ * Arithmetic and comparison are only defined between amounts of the same resource.
+ *
+ * @property resource Resource being quantified.
+ * @property quantity Non-negative quantity of that resource.
+ */
 data class ResourceAmount(val resource: ResourceRef, val quantity: Quantity) : Comparable<ResourceAmount> {
 
   init {
     require(quantity.value >= BigDecimal.ZERO)
   }
 
+  /**
+   * Adds two resource amounts of the same resource.
+   *
+   * @param other Amount to add.
+   * @return Sum of the two amounts.
+   * @throws IllegalArgumentException if resources differ.
+   */
   operator fun plus(other: ResourceAmount): ResourceAmount {
     require(resource == other.resource) { "Cannot add ResourceAmount of different resources: $resource and ${other.resource}" }
     return ResourceAmount(resource, quantity + other.quantity)
   }
 
+  /**
+   * Subtracts [other] from this amount (same resource required).
+   *
+   * @param other Amount to subtract.
+   * @return Difference of the two amounts.
+   * @throws IllegalArgumentException if resources differ or the result would be negative.
+   */
   operator fun minus(other: ResourceAmount): ResourceAmount {
     require(resource == other.resource) { "Cannot subtract ResourceAmount of different resources: $resource and ${other.resource}" }
     return ResourceAmount(resource, quantity - other.quantity)
   }
 
+  /**
+   * Compares two resource amounts of the same resource.
+   *
+   * @param other Amount to compare with.
+   * @return Negative, zero or positive integer according to natural order.
+   * @throws IllegalArgumentException if resources differ.
+   */
   override fun compareTo(other: ResourceAmount): Int {
     require(resource == other.resource) { "Cannot compare ResourceAmount of different resources: $resource and ${other.resource}" }
     return quantity.compareTo(other.quantity)
   }
 
+  /** Returns `true` when the quantity is zero. */
   fun isZero(): Boolean = quantity.isZero()
 
+  /** Returns `true` when the quantity is strictly positive. */
   fun isPositive(): Boolean = quantity.isPositive()
 
   companion object {
+    /**
+     * Creates a [ResourceAmount] from type, id and [BigDecimal] amount.
+     *
+     * @param type Resource type.
+     * @param id Resource identifier.
+     * @param amount Non-negative quantity.
+     */
     fun of(type: String, id: String, amount: BigDecimal): ResourceAmount =
       ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
 
+    /**
+     * Creates a [ResourceAmount] from type, id and [Long] amount.
+     *
+     * @param type Resource type.
+     * @param id Resource identifier.
+     * @param amount Non-negative quantity.
+     */
     fun of(type: String, id: String, amount: Long): ResourceAmount =
       ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
 
+    /**
+     * Creates a [ResourceAmount] from type, id and decimal string.
+     *
+     * @param type Resource type.
+     * @param id Resource identifier.
+     * @param amount Non-negative decimal representation.
+     */
     fun of(type: String, id: String, amount: String): ResourceAmount =
       ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
 
+    /**
+     * Creates a [ResourceAmount] from an existing [ResourceRef] and [BigDecimal].
+     *
+     * @param resource Resource reference.
+     * @param amount Non-negative quantity.
+     */
     fun of(resource: ResourceRef, amount: BigDecimal): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
+    /**
+     * Creates a [ResourceAmount] from an existing [ResourceRef] and [Long].
+     *
+     * @param resource Resource reference.
+     * @param amount Non-negative quantity.
+     */
     fun of(resource: ResourceRef, amount: Long): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
+    /**
+     * Creates a [ResourceAmount] from an existing [ResourceRef] and decimal string.
+     *
+     * @param resource Resource reference.
+     * @param amount Non-negative decimal representation.
+     */
     fun of(resource: ResourceRef, amount: String): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
+    /**
+     * Returns a zero-valued [ResourceAmount] for the given resource.
+     *
+     * @param resource Resource reference.
+     */
     fun zero(resource: ResourceRef): ResourceAmount = ResourceAmount(resource, Quantity.ZERO)
   }
 }
 
+/**
+ * Unified economic value that can be either monetary or a resource amount.
+ *
+ * Used by movements, transfers, charges and issuance/retirement operations.
+ */
 sealed class EconomicValue {
+  /**
+   * Monetary economic value.
+   *
+   * @property money Monetary amount.
+   */
   data class Monetary(val money: Money) : EconomicValue()
+
+  /**
+   * Non-monetary resource economic value.
+   *
+   * @property amount Resource amount.
+   */
   data class Resource(val amount: ResourceAmount) : EconomicValue()
 
   companion object {
+    /** Wraps a [Money] instance. */
     fun of(money: Money): EconomicValue = Monetary(money)
+
+    /** Wraps a [ResourceAmount] instance. */
     fun of(amount: ResourceAmount): EconomicValue = Resource(amount)
   }
 }
 
+/**
+ * Immutable snapshot of an account's economic holdings.
+ *
+ * Maps that are empty for a given key are treated as zero quantity.
+ *
+ * @property moneys Map of currency → quantity (zero quantities are omitted).
+ * @property resources Map of resource → quantity (zero quantities are omitted).
+ */
 data class Balance(
   val moneys: Map<Currency, Quantity>, val resources: Map<ResourceRef, Quantity>
 ) {
+  /**
+   * Returns the quantity of the given currency, or [Quantity.ZERO] if absent.
+   *
+   * @param currency Currency to query.
+   */
   fun moneyOf(currency: Currency): Quantity = moneys[currency] ?: Quantity.ZERO
 
+  /**
+   * Returns the quantity of the given resource, or [Quantity.ZERO] if absent.
+   *
+   * @param resource Resource to query.
+   */
   fun resourceOf(resource: ResourceRef): Quantity = resources[resource] ?: Quantity.ZERO
 
+  /** Returns `true` when the balance contains neither money nor resources. */
   fun isEmpty(): Boolean = moneys.isEmpty() && resources.isEmpty()
 
   companion object {
+    /** Empty balance (no money, no resources). */
     val EMPTY = Balance(emptyMap(), emptyMap())
   }
 }
 
+/**
+ * Mutable economic account belonging to a single [Economy] instance.
+ *
+ * State is encapsulated; external code obtains only immutable [Balance] snapshots.
+ * All mutations occur exclusively through the atomic commit mechanism of [Economy].
+ *
+ * @property id Unique account identifier.
+ */
 class Account internal constructor(val id: AccountId) {
   private val moneys = mutableMapOf<Currency, Quantity>()
   private val resources = mutableMapOf<ResourceRef, Quantity>()
 
+  /**
+   * Returns an immutable snapshot of the current holdings.
+   */
   fun balance(): Balance {
     return Balance(
       moneys = moneys.toMap(), resources = resources.toMap()
@@ -261,6 +534,20 @@ class Account internal constructor(val id: AccountId) {
   }
 }
 
+/**
+ * Single economic movement of value from an optional source account to an optional destination account.
+ *
+ * - Transfer: both [from] and [to] present.
+ * - Issuance (creation of value): [from] is `null`, [to] is present.
+ * - Retirement (destruction of value): [from] is present, [to] is `null`.
+ *
+ * At least one of [from] or [to] must be non-null.
+ *
+ * @property from Source account, or `null` for issuance.
+ * @property to Destination account, or `null` for retirement.
+ * @property value Value being moved.
+ * @throws IllegalArgumentException if both [from] and [to] are null.
+ */
 data class Movement(
   val from: AccountId?, val to: AccountId?, val value: EconomicValue
 ) {
@@ -269,10 +556,25 @@ data class Movement(
   }
 }
 
+/**
+ * Immutable record of a committed economic operation.
+ *
+ * Once written to the ledger a [Transaction] is never modified.
+ *
+ * @property id Unique transaction identifier.
+ * @property operationId Logical operation this transaction belongs to.
+ * @property movements Ordered list of individual movements that constitute the transaction.
+ * @property timestamp Instant at which the transaction was committed.
+ */
 data class Transaction(
   val id: TransactionId, val operationId: OperationId, val movements: List<Movement>, val timestamp: Instant
 )
 
+/**
+ * Append-only historical ledger of committed transactions.
+ *
+ * All mutations occur exclusively under the write lock of the owning [Economy].
+ */
 internal class Ledger {
   private val transactions = mutableListOf<Transaction>()
 
@@ -280,19 +582,50 @@ internal class Ledger {
     transactions.add(transaction)
   }
 
+  /** Returns an immutable copy of the full transaction history. */
   fun history(): List<Transaction> = transactions.toList()
 
+  /** Returns the number of committed transactions. */
   fun size(): Int = transactions.size
 
+  /**
+   * Looks up a transaction by its identifier.
+   *
+   * @param id Transaction identifier.
+   * @return The transaction, or `null` if not found.
+   */
   fun get(id: TransactionId): Transaction? = transactions.find { it.id == id }
 
+  /**
+   * Returns all transactions that belong to the given logical operation.
+   *
+   * @param operationId Logical operation identifier.
+   */
   fun byOperation(operationId: OperationId): List<Transaction> = transactions.filter { it.operationId == operationId }
 }
 
+/**
+ * Description of a single value transfer between two distinct accounts.
+ *
+ * Used as input to [Economy.transfer] and as building block of [Exchange].
+ *
+ * @property from Source account.
+ * @property to Destination account (must differ from [from]).
+ * @property value Value to transfer.
+ */
 data class Transfer(
   val from: AccountId, val to: AccountId, val value: EconomicValue
 )
 
+/**
+ * Atomic multi-leg economic exchange composed of one or more [Transfer]s.
+ *
+ * All transfers are validated and applied together; either the whole exchange
+ * succeeds or none of the balances change.
+ *
+ * @property transfers Ordered non-empty list of transfers that form the exchange.
+ * @throws IllegalArgumentException if [transfers] is empty.
+ */
 data class Exchange(
   val transfers: List<Transfer>
 ) {
@@ -301,14 +634,49 @@ data class Exchange(
   }
 }
 
+/**
+ * Additional charge (fee, tax, commission, etc.) attached to a transfer or exchange.
+ *
+ * The library does not interpret the semantic meaning of a charge; the application
+ * decides whether it represents a fee, tax, penalty or any other concept.
+ *
+ * @property from Account that pays the charge.
+ * @property to Account that receives the charge.
+ * @property value Value of the charge.
+ */
 data class Charge(
   val from: AccountId, val to: AccountId, val value: EconomicValue
 )
 
+/**
+ * Lifecycle state of a [Loan].
+ */
 enum class LoanState {
-  OPEN, PAID, DEFAULTED
+  /** Loan is active and can still receive payments. */
+  OPEN,
+
+  /** Loan has been fully repaid. */
+  PAID,
+
+  /** Loan has been marked as defaulted by the application. */
+  DEFAULTED
 }
 
+/**
+ * Financial obligation between a creditor and a debtor.
+ *
+ * Creation of a loan automatically transfers the principal from creditor to debtor.
+ * Subsequent payments are performed via ordinary transfers and update the [paid] amount.
+ *
+ * @property id Unique loan identifier.
+ * @property creditor Account that lent the principal.
+ * @property debtor Account that received the principal and owes repayment.
+ * @property principal Original amount lent.
+ * @property interest Contracted interest amount (may be zero).
+ * @property dueDate Instant after which the loan is considered overdue (application-defined).
+ * @property paid Amount already repaid.
+ * @property state Current lifecycle state.
+ */
 data class Loan(
   val id: LoanId,
   val creditor: AccountId,
@@ -319,11 +687,32 @@ data class Loan(
   val paid: Money,
   val state: LoanState
 ) {
+  /**
+   * Remaining amount still owed (principal + interest − paid).
+   */
   fun amountDue(): Money = principal + interest - paid
 
+  /**
+   * Returns `true` when the loan has been fully repaid.
+   */
   fun isFullyPaid(): Boolean = paid >= principal + interest
 }
 
+/**
+ * Central economic engine.
+ *
+ * Provides a thread-safe, in-memory economy supporting:
+ * - accounts holding money and resources,
+ * - atomic issuance, retirement, transfer and multi-leg exchange,
+ * - optional charges attached to operations,
+ * - interest calculation (pure function),
+ * - loans with explicit payment and defaulting,
+ * - append-only ledger and consistent snapshots.
+ *
+ * All mutating operations are atomic with respect to the entire [Economy] instance.
+ * Concurrent readers are allowed; writers are exclusive.
+ * Distinct [Economy] instances are completely independent.
+ */
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
@@ -353,6 +742,13 @@ class Economy {
     return lock.write { block() }
   }
 
+  /**
+   * Creates a new empty account.
+   *
+   * @param id Desired account identifier.
+   * @return The newly created [Account].
+   * @throws IllegalArgumentException if an account with the same [id] already exists.
+   */
   fun createAccount(id: AccountId): Account {
     return write {
       if (accounts.containsKey(id)) {
@@ -364,22 +760,44 @@ class Economy {
     }
   }
 
+  /**
+   * Returns the account with the given identifier, or `null` if it does not exist.
+   *
+   * @param id Account identifier.
+   */
   fun getAccount(id: AccountId): Account? {
     return read { accounts[id] }
   }
 
+  /**
+   * Returns `true` if an account with the given identifier exists.
+   *
+   * @param id Account identifier.
+   */
   fun accountExists(id: AccountId): Boolean {
     return read { accounts.containsKey(id) }
   }
 
+  /**
+   * Returns an immutable set of all existing account identifiers.
+   */
   fun accountIds(): Set<AccountId> {
     return read { accounts.keys.toSet() }
   }
 
+  /**
+   * Returns a list of all existing account identifiers.
+   */
   fun accounts(): List<AccountId> {
     return read { accounts.keys.toList() }
   }
 
+  /**
+   * Returns an immutable balance snapshot of the given account.
+   *
+   * @param id Account identifier.
+   * @throws IllegalArgumentException if the account does not exist.
+   */
   fun balanceOf(id: AccountId): Balance {
     return read {
       val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
@@ -387,12 +805,18 @@ class Economy {
     }
   }
 
+  /**
+   * Returns an immutable map of every account identifier to its current balance.
+   */
   fun balances(): Map<AccountId, Balance> {
     return read {
       accounts.mapValues { it.value.balance() }
     }
   }
 
+  /**
+   * Returns the set of all currencies that appear in any account.
+   */
   fun currencies(): Set<Currency> {
     return read {
       val result = mutableSetOf<Currency>()
@@ -403,6 +827,12 @@ class Economy {
     }
   }
 
+  /**
+   * Returns the set of currencies held by a specific account.
+   *
+   * @param id Account identifier.
+   * @throws IllegalArgumentException if the account does not exist.
+   */
   fun currenciesOf(id: AccountId): Set<Currency> {
     return read {
       val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
@@ -410,6 +840,9 @@ class Economy {
     }
   }
 
+  /**
+   * Returns the set of all resources that appear in any account.
+   */
   fun resources(): Set<ResourceRef> {
     return read {
       val result = mutableSetOf<ResourceRef>()
@@ -420,6 +853,12 @@ class Economy {
     }
   }
 
+  /**
+   * Returns the set of resources held by a specific account.
+   *
+   * @param id Account identifier.
+   * @throws IllegalArgumentException if the account does not exist.
+   */
   fun resourcesOf(id: AccountId): Set<ResourceRef> {
     return read {
       val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
@@ -427,40 +866,82 @@ class Economy {
     }
   }
 
+  /**
+   * Returns an immutable copy of the complete ledger history.
+   */
   fun ledgerHistory(): List<Transaction> {
     return read { ledger.history() }
   }
 
+  /**
+   * Returns the number of committed transactions.
+   */
   fun ledgerSize(): Int {
     return read { ledger.size() }
   }
 
+  /**
+   * Looks up a transaction by its identifier.
+   *
+   * @param id Transaction identifier.
+   * @return The transaction, or `null` if not found.
+   */
   fun getTransaction(id: TransactionId): Transaction? {
     return read { ledger.get(id) }
   }
 
+  /**
+   * Returns all transactions that belong to the given logical operation.
+   *
+   * @param operationId Logical operation identifier.
+   */
   fun transactionsByOperation(operationId: OperationId): List<Transaction> {
     return read { ledger.byOperation(operationId) }
   }
 
+  /**
+   * Looks up a loan by its identifier.
+   *
+   * @param id Loan identifier.
+   * @return The loan, or `null` if not found.
+   */
   fun getLoan(id: LoanId): Loan? {
     return read { loans[id] }
   }
 
+  /**
+   * Returns `true` if a loan with the given identifier exists.
+   *
+   * @param id Loan identifier.
+   */
   fun loanExists(id: LoanId): Boolean {
     return read { loans.containsKey(id) }
   }
 
+  /**
+   * Returns all loans in which the given account participates
+   * (either as creditor or as debtor).
+   *
+   * @param accountId Account identifier.
+   */
   fun loansOf(accountId: AccountId): List<Loan> {
     return read {
       loans.values.filter { it.creditor == accountId || it.debtor == accountId }
     }
   }
 
+  /**
+   * Returns an immutable list of every loan known to this economy.
+   */
   fun allLoans(): List<Loan> {
     return read { loans.values.toList() }
   }
 
+  /**
+   * Returns all loans that are currently in the given state.
+   *
+   * @param state Desired loan state.
+   */
   fun loansByState(state: LoanState): List<Loan> {
     return read {
       loans.values.filter { it.state == state }
@@ -471,6 +952,18 @@ class Economy {
     return accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
   }
 
+  /**
+   * Atomically validates and applies a prepared [Transaction].
+   *
+   * The method:
+   * 1. acquires exclusive write access,
+   * 2. validates every movement and projects the resulting balances,
+   * 3. aborts with an exception if any validation fails (no state change),
+   * 4. applies all balance changes and appends the transaction to the ledger,
+   * 5. releases the lock.
+   *
+   * No intermediate state is ever visible to concurrent readers.
+   */
   private fun commit(transaction: Transaction) {
     write {
       val pendingDeltas = mutableMapOf<AccountId, MutableList<Pair<EconomicValue, Boolean>>>()
@@ -574,6 +1067,16 @@ class Economy {
     }
   }
 
+  /**
+   * Explicitly creates (issues) value into an account.
+   *
+   * Corresponds to the movement `null → account`.
+   *
+   * @param to Destination account.
+   * @param value Value to create (money or resource).
+   * @return The committed [Transaction].
+   * @throws IllegalArgumentException if the account does not exist or the quantity is negative.
+   */
   fun issue(to: AccountId, value: EconomicValue): Transaction {
     return write {
       requireAccount(to)
@@ -601,6 +1104,18 @@ class Economy {
     }
   }
 
+  /**
+   * Explicitly destroys (retires) value from an account.
+   *
+   * Corresponds to the movement `account → null`.
+   * The account must hold at least the requested quantity.
+   *
+   * @param from Source account.
+   * @param value Value to destroy (money or resource).
+   * @return The committed [Transaction].
+   * @throws IllegalArgumentException if the account does not exist, the quantity is negative,
+   *         or the account holds insufficient funds/resources.
+   */
   fun retire(from: AccountId, value: EconomicValue): Transaction {
     return write {
       requireAccount(from)
@@ -628,6 +1143,17 @@ class Economy {
     }
   }
 
+  /**
+   * Atomically transfers value from one account to another, optionally accompanied by charges.
+   *
+   * The whole operation (main transfer + all charges) succeeds or fails as a unit.
+   *
+   * @param transfer Description of the main value movement.
+   * @param charges Optional additional charges that form part of the same transaction.
+   * @return The committed [Transaction].
+   * @throws IllegalArgumentException on any validation failure (same account, missing account,
+   *         negative quantity, insufficient balance, etc.).
+   */
   fun transfer(transfer: Transfer, charges: List<Charge> = emptyList()): Transaction {
     return write {
       require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
@@ -681,6 +1207,16 @@ class Economy {
     }
   }
 
+  /**
+   * Atomically executes a multi-leg exchange, optionally accompanied by charges.
+   *
+   * All transfers and charges are validated and applied together.
+   *
+   * @param exchange Description of the multi-leg exchange.
+   * @param charges Optional additional charges that form part of the same transaction.
+   * @return The committed [Transaction].
+   * @throws IllegalArgumentException on any validation failure.
+   */
   fun exchange(exchange: Exchange, charges: List<Charge> = emptyList()): Transaction {
     return write {
       for (transfer in exchange.transfers) {
@@ -738,6 +1274,18 @@ class Economy {
     }
   }
 
+  /**
+   * Creates a new loan by transferring the principal from creditor to debtor
+   * and recording the resulting obligation.
+   *
+   * @param creditor Account that supplies the principal.
+   * @param debtor Account that receives the principal.
+   * @param principal Positive amount being lent (same currency as [interest]).
+   * @param interest Non-negative contracted interest amount.
+   * @param dueDate Application-defined due instant.
+   * @return The newly created [Loan] in state [LoanState.OPEN].
+   * @throws IllegalArgumentException on any validation failure.
+   */
   fun createLoan(
     creditor: AccountId, debtor: AccountId, principal: Money, interest: Money, dueDate: Instant
   ): Loan {
@@ -771,6 +1319,20 @@ class Economy {
     }
   }
 
+  /**
+   * Applies a payment toward an open loan.
+   *
+   * The payment is performed as an ordinary transfer from debtor to creditor
+   * and the loan's [Loan.paid] amount is updated.  If the loan becomes fully
+   * repaid its state changes to [LoanState.PAID].
+   *
+   * @param loanId Identifier of the loan being repaid.
+   * @param amount Positive payment amount (same currency as the loan).
+   * @return The updated [Loan].
+   * @throws IllegalArgumentException if the loan does not exist, is not open,
+   *         the currency mismatches, the amount is non-positive, or the payment
+   *         exceeds the remaining amount due.
+   */
   fun payLoan(loanId: LoanId, amount: Money): Loan {
     return write {
       val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
@@ -800,6 +1362,16 @@ class Economy {
     }
   }
 
+  /**
+   * Marks an open loan as defaulted.
+   *
+   * No automatic balance adjustments are performed; the application decides
+   * any subsequent economic consequences.
+   *
+   * @param loanId Identifier of the loan to default.
+   * @return The updated [Loan] in state [LoanState.DEFAULTED].
+   * @throws IllegalArgumentException if the loan does not exist or is not open.
+   */
   fun defaultLoan(loanId: LoanId): Loan {
     return write {
       val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
@@ -811,7 +1383,25 @@ class Economy {
   }
 }
 
+/**
+ * Pure interest-calculation utilities.
+ *
+ * These functions never touch accounts, the ledger or any mutable state.
+ * They simply compute a [Money] result from the supplied parameters.
+ */
 object Interest {
+  /**
+   * Calculates simple interest.
+   *
+   * Formula: `principal × rate × periods`
+   *
+   * @param principal Base amount.
+   * @param rate Interest rate per period (non-negative).
+   * @param periods Number of discrete periods (non-negative integer).
+   * @return Interest amount expressed in the same currency as [principal].
+   *         Returns zero when periods is zero, principal is zero or rate is zero.
+   * @throws IllegalArgumentException if [periods] is negative.
+   */
   fun simple(principal: Money, rate: Quantity, periods: Int): Money {
     require(periods >= 0) { "Periods must be non-negative" }
     if (periods == 0 || principal.isZero() || rate.isZero()) {
@@ -821,6 +1411,19 @@ object Interest {
     return Money(interestQuantity, principal.currency)
   }
 
+  /**
+   * Calculates compound interest.
+   *
+   * Formula: `principal × ((1 + rate)^periods − 1)`
+   *
+   * @param principal Base amount.
+   * @param rate Interest rate per period (non-negative).
+   * @param periods Number of discrete periods (non-negative integer).
+   * @return Interest amount expressed in the same currency as [principal].
+   *         Returns zero when periods is zero or principal is zero.
+   * @throws IllegalArgumentException if [periods] is negative or the calculation
+   *         produces a negative intermediate result.
+   */
   fun compound(principal: Money, rate: Quantity, periods: Int): Money {
     require(periods >= 0) { "Periods must be non-negative" }
     if (periods == 0 || principal.isZero()) return Money.zero(principal.currency)
