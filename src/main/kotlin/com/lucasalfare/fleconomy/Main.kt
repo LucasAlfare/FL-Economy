@@ -3,6 +3,7 @@
 package com.lucasalfare.fleconomy
 
 import java.math.BigDecimal
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
@@ -36,8 +37,7 @@ class Quantity private constructor(val value: BigDecimal) : Comparable<Quantity>
     require(value >= BigDecimal.ZERO) { "Quantity cannot be negative" }
   }
 
-  operator fun plus(other: Quantity): Quantity =
-    Quantity(value + other.value)
+  operator fun plus(other: Quantity): Quantity = Quantity(value + other.value)
 
   operator fun minus(other: Quantity): Quantity {
     val result = value - other.value
@@ -105,17 +105,13 @@ data class Money(val quantity: Quantity, val currency: Currency) : Comparable<Mo
   fun isPositive(): Boolean = quantity.isPositive()
 
   companion object {
-    fun of(amount: BigDecimal, currency: Currency): Money =
-      Money(Quantity.of(amount), currency)
+    fun of(amount: BigDecimal, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
-    fun of(amount: Long, currency: Currency): Money =
-      Money(Quantity.of(amount), currency)
+    fun of(amount: Long, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
-    fun of(amount: String, currency: Currency): Money =
-      Money(Quantity.of(amount), currency)
+    fun of(amount: String, currency: Currency): Money = Money(Quantity.of(amount), currency)
 
-    fun zero(currency: Currency): Money =
-      Money(Quantity.ZERO, currency)
+    fun zero(currency: Currency): Money = Money(Quantity.ZERO, currency)
   }
 }
 
@@ -161,17 +157,13 @@ data class ResourceAmount(val resource: ResourceRef, val quantity: Quantity) : C
     fun of(type: String, id: String, amount: String): ResourceAmount =
       ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
 
-    fun of(resource: ResourceRef, amount: BigDecimal): ResourceAmount =
-      ResourceAmount(resource, Quantity.of(amount))
+    fun of(resource: ResourceRef, amount: BigDecimal): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
-    fun of(resource: ResourceRef, amount: Long): ResourceAmount =
-      ResourceAmount(resource, Quantity.of(amount))
+    fun of(resource: ResourceRef, amount: Long): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
-    fun of(resource: ResourceRef, amount: String): ResourceAmount =
-      ResourceAmount(resource, Quantity.of(amount))
+    fun of(resource: ResourceRef, amount: String): ResourceAmount = ResourceAmount(resource, Quantity.of(amount))
 
-    fun zero(resource: ResourceRef): ResourceAmount =
-      ResourceAmount(resource, Quantity.ZERO)
+    fun zero(resource: ResourceRef): ResourceAmount = ResourceAmount(resource, Quantity.ZERO)
   }
 }
 
@@ -186,8 +178,7 @@ sealed class EconomicValue {
 }
 
 data class Balance(
-  val moneys: Map<Currency, Quantity>,
-  val resources: Map<ResourceRef, Quantity>
+  val moneys: Map<Currency, Quantity>, val resources: Map<ResourceRef, Quantity>
 ) {
   fun moneyOf(currency: Currency): Quantity = moneys[currency] ?: Quantity.ZERO
 
@@ -206,8 +197,7 @@ class Account internal constructor(val id: AccountId) {
 
   fun balance(): Balance {
     return Balance(
-      moneys = moneys.toMap(),
-      resources = resources.toMap()
+      moneys = moneys.toMap(), resources = resources.toMap()
     )
   }
 
@@ -256,6 +246,7 @@ class Account internal constructor(val id: AccountId) {
       is EconomicValue.Monetary -> {
         if (add) addMoney(value.money) else subtractMoney(value.money)
       }
+
       is EconomicValue.Resource -> {
         if (add) addResource(value.amount) else subtractResource(value.amount)
       }
@@ -263,13 +254,43 @@ class Account internal constructor(val id: AccountId) {
   }
 }
 
+data class Movement(
+  val from: AccountId?, val to: AccountId?, val value: EconomicValue
+) {
+  init {
+    require(from != null || to != null) { "Movement must have at least one of from or to" }
+  }
+}
+
+data class Transaction(
+  val id: TransactionId, val operationId: OperationId, val movements: List<Movement>, val timestamp: Instant
+)
+
+class Ledger {
+  private val transactions = mutableListOf<Transaction>()
+
+  internal fun append(transaction: Transaction) {
+    transactions.add(transaction)
+  }
+
+  fun history(): List<Transaction> = transactions.toList()
+
+  fun size(): Int = transactions.size
+}
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
+  private val transactionIdGenerator = AtomicLong(0)
   private val accounts = ConcurrentHashMap<AccountId, Account>()
+  private val ledger = Ledger()
 
   internal fun nextOperationId(): OperationId {
     return OperationId(operationIdGenerator.incrementAndGet().toString())
+  }
+
+  internal fun nextTransactionId(): TransactionId {
+    return TransactionId(transactionIdGenerator.incrementAndGet().toString())
   }
 
   internal fun <T> read(block: () -> T): T {
@@ -306,7 +327,13 @@ class Economy {
     }
   }
 
+  fun ledgerHistory(): List<Transaction> {
+    return read { ledger.history() }
+  }
+
   internal fun requireAccount(id: AccountId): Account {
     return accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
   }
+
+  internal fun getLedger(): Ledger = ledger
 }
