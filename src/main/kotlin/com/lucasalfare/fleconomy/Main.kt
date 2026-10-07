@@ -5,6 +5,8 @@ package com.lucasalfare.fleconomy
 import java.math.BigDecimal
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
@@ -571,6 +573,120 @@ data class Transaction(
 )
 
 /**
+ * Immutable description of one account balance before and after a committed transaction.
+ *
+ * A balance change is emitted only when the account's resulting balance differs
+ * from its balance immediately before the transaction.
+ *
+ * @property accountId Account whose balance changed.
+ * @property previousBalance Balance immediately before the transaction.
+ * @property newBalance Balance immediately after the transaction.
+ */
+data class BalanceChange(
+  val accountId: AccountId, val previousBalance: Balance, val newBalance: Balance
+)
+
+/**
+ * Base type for immutable facts emitted by an [Economy] after successful state changes.
+ *
+ * Events are delivered synchronously on the thread that performed the mutation,
+ * but only after the corresponding state change has been committed and the economy's
+ * write lock has been released. Listener failures never roll back an already committed
+ * economic operation.
+ */
+sealed interface EconomyEvent {
+  /**
+   * Reports that an account has been created.
+   *
+   * @property accountId Identifier of the newly created account.
+   */
+  data class AccountCreated(val accountId: AccountId) : EconomyEvent
+
+  /**
+   * Reports that a transaction has been committed to the ledger.
+   *
+   * @property transaction Committed transaction.
+   * @property balanceChanges Immutable before/after snapshots for accounts whose balances changed.
+   */
+  data class TransactionCommitted(
+    val transaction: Transaction, val balanceChanges: List<BalanceChange>
+  ) : EconomyEvent
+
+  /**
+   * Reports that a loan has been created successfully.
+   *
+   * @property loan Newly created loan.
+   * @property transaction Transaction that transferred the loan principal from creditor to debtor.
+   */
+  data class LoanCreated(
+    val loan: Loan, val transaction: Transaction
+  ) : EconomyEvent
+
+  /**
+   * Reports that a loan payment has been committed and the loan record updated.
+   *
+   * @property previousLoan Loan state immediately before the payment.
+   * @property loan Updated loan state after the payment.
+   * @property transaction Transaction representing the payment transfer.
+   */
+  data class LoanPaid(
+    val previousLoan: Loan, val loan: Loan, val transaction: Transaction
+  ) : EconomyEvent
+
+  /**
+   * Reports that an open loan has been marked as defaulted.
+   *
+   * @property previousLoan Loan state immediately before defaulting.
+   * @property loan Updated loan state after being marked as defaulted.
+   */
+  data class LoanDefaulted(
+    val previousLoan: Loan, val loan: Loan
+  ) : EconomyEvent
+}
+
+/**
+ * Observer callback for [EconomyEvent] notifications.
+ *
+ * Implementations should treat events as immutable facts and should avoid modifying
+ * the observed [Economy] from inside a callback unless that behavior is intentionally coordinated
+ * by the application.
+ */
+fun interface EconomyEventListener {
+  /**
+   * Receives one event emitted by an [Economy].
+   *
+   * @param event Immutable economic event.
+   */
+  fun onEvent(event: EconomyEvent)
+}
+
+/**
+ * Handle to an [Economy] event subscription.
+ *
+ * Subscriptions are active immediately after creation. Calling [unsubscribe] more than once
+ * is safe and has no additional effect.
+ */
+class EconomySubscription internal constructor(
+  private val unsubscribeAction: () -> Unit
+) {
+  private val active = AtomicBoolean(true)
+
+  /**
+   * Removes this subscription from its [Economy].
+   *
+   * This operation is idempotent.
+   */
+  fun unsubscribe() {
+    if (active.compareAndSet(true, false)) {
+      unsubscribeAction()
+    }
+  }
+
+  /** Returns `true` when this subscription is still registered. */
+  fun isActive(): Boolean = active.get()
+}
+
+/**
  * Append-only historical ledger of committed transactions.
  *
  * All mutations occur exclusively under the write lock of the owning [Economy].
@@ -707,7 +823,8 @@ data class Loan(
  * - optional charges attached to operations,
  * - interest calculation (pure function),
  * - loans with explicit payment and defaulting,
- * - append-only ledger and consistent snapshots.
+ * - append-only ledger and consistent snapshots,
+ * - synchronous observation of successful economic events.
  *
  * All mutating operations are atomic with respect to the entire [Economy] instance.
  * Concurrent readers are allowed; writers are exclusive.
@@ -721,6 +838,7 @@ class Economy {
   private val accounts = ConcurrentHashMap<AccountId, Account>()
   private val ledger = Ledger()
   private val loans = ConcurrentHashMap<LoanId, Loan>()
+  private val eventListeners = CopyOnWriteArrayList<EconomyEventListener>()
 
   private fun nextOperationId(): OperationId {
     return OperationId(operationIdGenerator.incrementAndGet().toString())
@@ -743,19 +861,77 @@ class Economy {
   }
 
   /**
+   * Subscribes to every [EconomyEvent] emitted by this economy.
+   *
+   * Events are delivered synchronously in registration order, after the corresponding
+   * mutation has committed and outside the economy's write lock. Each subscription is
+   * independent and can be removed through the returned [EconomySubscription].
+   *
+   * @param listener Observer callback.
+   * @return Subscription handle that can be used to stop receiving events.
+   */
+  fun subscribe(listener: EconomyEventListener): EconomySubscription {
+    eventListeners.add(listener)
+    return EconomySubscription {
+      eventListeners.remove(listener)
+    }
+  }
+
+  /**
+   * Subscribes only to events of the requested [EconomyEvent] subtype.
+   *
+   * @param listener Observer callback for the selected event type.
+   * @return Subscription handle that can be used to stop receiving matching events.
+   */
+  inline fun <reified E : EconomyEvent> subscribe(noinline listener: (E) -> Unit): EconomySubscription {
+    return subscribe(EconomyEventListener { event ->
+      if (event is E) {
+        listener(event)
+      }
+    })
+  }
+
+  private fun publish(events: List<EconomyEvent>) {
+    if (events.isEmpty()) return
+    for (event in events) {
+      for (listener in eventListeners) {
+        try {
+          listener.onEvent(event)
+        } catch (_: Throwable) {
+          // Listener failures are isolated from the already committed economy state.
+        }
+      }
+    }
+  }
+
+  private fun <T> mutate(block: (MutableList<EconomyEvent>) -> T): T {
+    val outcome = write {
+      val events = mutableListOf<EconomyEvent>()
+      val result = block(events)
+      result to events.toList()
+    }
+    publish(outcome.second)
+    return outcome.first
+  }
+
+  /**
    * Creates a new empty account.
+   *
+   * On success an [EconomyEvent.AccountCreated] event is emitted after the account
+   * has been added to the economy.
    *
    * @param id Desired account identifier.
    * @return The newly created [Account].
    * @throws IllegalArgumentException if an account with the same [id] already exists.
    */
   fun createAccount(id: AccountId): Account {
-    return write {
-      if (accounts.containsKey(id)) {
+    return mutate { events ->
+      val account = if (accounts.containsKey(id)) {
         throw IllegalArgumentException("Account already exists: ${id.value}")
+      } else {
+        Account(id).also { accounts[id] = it }
       }
-      val account = Account(id)
-      accounts[id] = account
+      events += EconomyEvent.AccountCreated(id)
       account
     }
   }
@@ -960,110 +1136,122 @@ class Economy {
    * 2. validates every movement and projects the resulting balances,
    * 3. aborts with an exception if any validation fails (no state change),
    * 4. applies all balance changes and appends the transaction to the ledger,
-   * 5. releases the lock.
+   * 5. returns immutable balance-change snapshots for event publication,
+   * 6. releases the lock before observers are notified.
    *
    * No intermediate state is ever visible to concurrent readers.
    */
-  private fun commit(transaction: Transaction) {
-    write {
-      val pendingDeltas = mutableMapOf<AccountId, MutableList<Pair<EconomicValue, Boolean>>>()
+  private fun commit(transaction: Transaction): List<BalanceChange> {
+    val pendingDeltas = mutableMapOf<AccountId, MutableList<Pair<EconomicValue, Boolean>>>()
 
-      for (movement in transaction.movements) {
-        val value = movement.value
+    for (movement in transaction.movements) {
+      val value = movement.value
+      when (value) {
+        is EconomicValue.Monetary -> {
+          require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+            "Economic value quantity must be non-negative"
+          }
+        }
+
+        is EconomicValue.Resource -> {
+          require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+            "Economic value quantity must be non-negative"
+          }
+        }
+      }
+
+      if (movement.from != null) {
+        requireAccount(movement.from)
+        pendingDeltas.getOrPut(movement.from) { mutableListOf() }.add(value to false)
+      }
+      if (movement.to != null) {
+        requireAccount(movement.to)
+        pendingDeltas.getOrPut(movement.to) { mutableListOf() }.add(value to true)
+      }
+    }
+
+    val previousBalances = mutableMapOf<AccountId, Balance>()
+    val projected = mutableMapOf<AccountId, Balance>()
+    for ((accountId, deltas) in pendingDeltas) {
+      val account = requireAccount(accountId)
+      val current = account.balance()
+      previousBalances[accountId] = current
+      val moneys = current.moneys.toMutableMap()
+      val resources = current.resources.toMutableMap()
+
+      for ((value, add) in deltas) {
         when (value) {
           is EconomicValue.Monetary -> {
-            require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
-              "Economic value quantity must be non-negative"
+            val currency = value.money.currency
+            val currentQty = moneys[currency] ?: Quantity.ZERO
+            val newQty = if (add) {
+              currentQty + value.money.quantity
+            } else {
+              require(currentQty >= value.money.quantity) {
+                "Insufficient balance for ${currency.code} in account ${accountId.value}"
+              }
+              currentQty - value.money.quantity
+            }
+            if (newQty.isZero()) {
+              moneys.remove(currency)
+            } else {
+              moneys[currency] = newQty
             }
           }
 
           is EconomicValue.Resource -> {
-            require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
-              "Economic value quantity must be non-negative"
+            val resource = value.amount.resource
+            val currentQty = resources[resource] ?: Quantity.ZERO
+            val newQty = if (add) {
+              currentQty + value.amount.quantity
+            } else {
+              require(currentQty >= value.amount.quantity) {
+                "Insufficient resource ${resource.type}:${resource.id} in account ${accountId.value}"
+              }
+              currentQty - value.amount.quantity
+            }
+            if (newQty.isZero()) {
+              resources.remove(resource)
+            } else {
+              resources[resource] = newQty
             }
           }
         }
+      }
+      projected[accountId] = Balance(moneys.toMap(), resources.toMap())
+    }
 
-        if (movement.from != null) {
-          requireAccount(movement.from)
-          pendingDeltas.getOrPut(movement.from) { mutableListOf() }.add(value to false)
-        }
-        if (movement.to != null) {
-          requireAccount(movement.to)
-          pendingDeltas.getOrPut(movement.to) { mutableListOf() }.add(value to true)
+    for ((accountId, newBalance) in projected) {
+      val account = requireAccount(accountId)
+      for ((currency, _) in account.balance().moneys) {
+        if (currency !in newBalance.moneys) {
+          account.setMoney(currency, Quantity.ZERO)
         }
       }
-
-      val projected = mutableMapOf<AccountId, Balance>()
-      for ((accountId, deltas) in pendingDeltas) {
-        val account = requireAccount(accountId)
-        val current = account.balance()
-        val moneys = current.moneys.toMutableMap()
-        val resources = current.resources.toMutableMap()
-
-        for ((value, add) in deltas) {
-          when (value) {
-            is EconomicValue.Monetary -> {
-              val currency = value.money.currency
-              val currentQty = moneys[currency] ?: Quantity.ZERO
-              val newQty = if (add) {
-                currentQty + value.money.quantity
-              } else {
-                require(currentQty >= value.money.quantity) {
-                  "Insufficient balance for ${currency.code} in account ${accountId.value}"
-                }
-                currentQty - value.money.quantity
-              }
-              if (newQty.isZero()) {
-                moneys.remove(currency)
-              } else {
-                moneys[currency] = newQty
-              }
-            }
-
-            is EconomicValue.Resource -> {
-              val resource = value.amount.resource
-              val currentQty = resources[resource] ?: Quantity.ZERO
-              val newQty = if (add) {
-                currentQty + value.amount.quantity
-              } else {
-                require(currentQty >= value.amount.quantity) {
-                  "Insufficient resource ${resource.type}:${resource.id} in account ${accountId.value}"
-                }
-                currentQty - value.amount.quantity
-              }
-              if (newQty.isZero()) {
-                resources.remove(resource)
-              } else {
-                resources[resource] = newQty
-              }
-            }
-          }
-        }
-        projected[accountId] = Balance(moneys.toMap(), resources.toMap())
-      }
-
-      for ((accountId, newBalance) in projected) {
-        val account = requireAccount(accountId)
-        for ((currency, _) in account.balance().moneys) {
-          if (currency !in newBalance.moneys) {
-            account.setMoney(currency, Quantity.ZERO)
-          }
-        }
-        for ((resource, _) in account.balance().resources) {
-          if (resource !in newBalance.resources) {
-            account.setResource(resource, Quantity.ZERO)
-          }
-        }
-        for ((currency, qty) in newBalance.moneys) {
-          account.setMoney(currency, qty)
-        }
-        for ((resource, qty) in newBalance.resources) {
-          account.setResource(resource, qty)
+      for ((resource, _) in account.balance().resources) {
+        if (resource !in newBalance.resources) {
+          account.setResource(resource, Quantity.ZERO)
         }
       }
+      for ((currency, qty) in newBalance.moneys) {
+        account.setMoney(currency, qty)
+      }
+      for ((resource, qty) in newBalance.resources) {
+        account.setResource(resource, qty)
+      }
+    }
 
-      ledger.append(transaction)
+    ledger.append(transaction)
+
+    return projected.mapNotNull { (accountId, newBalance) ->
+      val previousBalance = previousBalances[accountId] ?: return@mapNotNull null
+      if (previousBalance == newBalance) {
+        null
+      } else {
+        BalanceChange(
+          accountId = accountId, previousBalance = previousBalance, newBalance = newBalance
+        )
+      }
     }
   }
 
@@ -1072,13 +1260,15 @@ class Economy {
    *
    * Corresponds to the movement `null → account`.
    *
+   * On success a [EconomyEvent.TransactionCommitted] event is emitted.
+   *
    * @param to Destination account.
    * @param value Value to create (money or resource).
    * @return The committed [Transaction].
    * @throws IllegalArgumentException if the account does not exist or the quantity is negative.
    */
   fun issue(to: AccountId, value: EconomicValue): Transaction {
-    return write {
+    return mutate { events ->
       requireAccount(to)
       when (value) {
         is EconomicValue.Monetary -> {
@@ -1099,7 +1289,8 @@ class Economy {
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
       )
-      commit(transaction)
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
       transaction
     }
   }
@@ -1110,6 +1301,8 @@ class Economy {
    * Corresponds to the movement `account → null`.
    * The account must hold at least the requested quantity.
    *
+   * On success a [EconomyEvent.TransactionCommitted] event is emitted.
+   *
    * @param from Source account.
    * @param value Value to destroy (money or resource).
    * @return The committed [Transaction].
@@ -1117,7 +1310,7 @@ class Economy {
    *         or the account holds insufficient funds/resources.
    */
   fun retire(from: AccountId, value: EconomicValue): Transaction {
-    return write {
+    return mutate { events ->
       requireAccount(from)
       when (value) {
         is EconomicValue.Monetary -> {
@@ -1138,7 +1331,8 @@ class Economy {
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
       )
-      commit(transaction)
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
       transaction
     }
   }
@@ -1147,6 +1341,8 @@ class Economy {
    * Atomically transfers value from one account to another, optionally accompanied by charges.
    *
    * The whole operation (main transfer + all charges) succeeds or fails as a unit.
+   * On success a [EconomyEvent.TransactionCommitted] event is emitted after the complete
+   * transaction has been committed.
    *
    * @param transfer Description of the main value movement.
    * @param charges Optional additional charges that form part of the same transaction.
@@ -1155,7 +1351,7 @@ class Economy {
    *         negative quantity, insufficient balance, etc.).
    */
   fun transfer(transfer: Transfer, charges: List<Charge> = emptyList()): Transaction {
-    return write {
+    return mutate { events ->
       require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
       requireAccount(transfer.from)
       requireAccount(transfer.to)
@@ -1202,7 +1398,8 @@ class Economy {
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = movements, timestamp = Instant.now()
       )
-      commit(transaction)
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
       transaction
     }
   }
@@ -1211,6 +1408,8 @@ class Economy {
    * Atomically executes a multi-leg exchange, optionally accompanied by charges.
    *
    * All transfers and charges are validated and applied together.
+   * On success a single [EconomyEvent.TransactionCommitted] event is emitted for the
+   * resulting transaction, regardless of how many individual movements it contains.
    *
    * @param exchange Description of the multi-leg exchange.
    * @param charges Optional additional charges that form part of the same transaction.
@@ -1218,7 +1417,7 @@ class Economy {
    * @throws IllegalArgumentException on any validation failure.
    */
   fun exchange(exchange: Exchange, charges: List<Charge> = emptyList()): Transaction {
-    return write {
+    return mutate { events ->
       for (transfer in exchange.transfers) {
         require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
         requireAccount(transfer.from)
@@ -1269,7 +1468,8 @@ class Economy {
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = movements, timestamp = Instant.now()
       )
-      commit(transaction)
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
       transaction
     }
   }
@@ -1277,6 +1477,9 @@ class Economy {
   /**
    * Creates a new loan by transferring the principal from creditor to debtor
    * and recording the resulting obligation.
+   *
+   * On success, the economy emits [EconomyEvent.TransactionCommitted] for the principal
+   * transfer followed by [EconomyEvent.LoanCreated] for the newly created obligation.
    *
    * @param creditor Account that supplies the principal.
    * @param debtor Account that receives the principal.
@@ -1289,7 +1492,7 @@ class Economy {
   fun createLoan(
     creditor: AccountId, debtor: AccountId, principal: Money, interest: Money, dueDate: Instant
   ): Loan {
-    return write {
+    return mutate { events ->
       require(creditor != debtor) { "Creditor and debtor cannot be the same account" }
       requireAccount(creditor)
       requireAccount(debtor)
@@ -1299,10 +1502,17 @@ class Economy {
       require(principal.isPositive()) { "Principal must be positive" }
       require(interest.quantity.value >= BigDecimal.ZERO) { "Interest must be non-negative" }
 
-      val transfer = Transfer(
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movement = Movement(
         from = creditor, to = debtor, value = EconomicValue.of(principal)
       )
-      val transaction = transfer(transfer)
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
+
       val loanId = nextLoanId()
       val loan = Loan(
         id = loanId,
@@ -1315,6 +1525,7 @@ class Economy {
         state = LoanState.OPEN
       )
       loans[loanId] = loan
+      events += EconomyEvent.LoanCreated(loan = loan, transaction = transaction)
       loan
     }
   }
@@ -1323,8 +1534,11 @@ class Economy {
    * Applies a payment toward an open loan.
    *
    * The payment is performed as an ordinary transfer from debtor to creditor
-   * and the loan's [Loan.paid] amount is updated.  If the loan becomes fully
+   * and the loan's [Loan.paid] amount is updated. If the loan becomes fully
    * repaid its state changes to [LoanState.PAID].
+   *
+   * On success, the economy emits [EconomyEvent.TransactionCommitted] followed by
+   * [EconomyEvent.LoanPaid].
    *
    * @param loanId Identifier of the loan being repaid.
    * @param amount Positive payment amount (same currency as the loan).
@@ -1334,7 +1548,7 @@ class Economy {
    *         exceeds the remaining amount due.
    */
   fun payLoan(loanId: LoanId, amount: Money): Loan {
-    return write {
+    return mutate { events ->
       val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
       require(loan.state == LoanState.OPEN) { "Loan is not open: ${loan.state}" }
       require(amount.currency == loan.principal.currency) {
@@ -1345,10 +1559,16 @@ class Economy {
       val due = loan.amountDue()
       require(amount <= due) { "Payment exceeds amount due: ${amount.quantity} > ${due.quantity}" }
 
-      val transfer = Transfer(
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movement = Movement(
         from = loan.debtor, to = loan.creditor, value = EconomicValue.of(amount)
       )
-      transfer(transfer)
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      val balanceChanges = commit(transaction)
+      events += EconomyEvent.TransactionCommitted(transaction, balanceChanges)
 
       val newPaid = loan.paid + amount
       val newState = if (newPaid >= loan.principal + loan.interest) {
@@ -1358,6 +1578,9 @@ class Economy {
       }
       val updated = loan.copy(paid = newPaid, state = newState)
       loans[loanId] = updated
+      events += EconomyEvent.LoanPaid(
+        previousLoan = loan, loan = updated, transaction = transaction
+      )
       updated
     }
   }
@@ -1368,16 +1591,19 @@ class Economy {
    * No automatic balance adjustments are performed; the application decides
    * any subsequent economic consequences.
    *
+   * On success an [EconomyEvent.LoanDefaulted] event is emitted.
+   *
    * @param loanId Identifier of the loan to default.
    * @return The updated [Loan] in state [LoanState.DEFAULTED].
    * @throws IllegalArgumentException if the loan does not exist or is not open.
    */
   fun defaultLoan(loanId: LoanId): Loan {
-    return write {
+    return mutate { events ->
       val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
       require(loan.state == LoanState.OPEN) { "Loan is not open: ${loan.state}" }
       val updated = loan.copy(state = LoanState.DEFAULTED)
       loans[loanId] = updated
+      events += EconomyEvent.LoanDefaulted(previousLoan = loan, loan = updated)
       updated
     }
   }
