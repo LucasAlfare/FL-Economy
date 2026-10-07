@@ -290,6 +290,10 @@ data class Exchange(
   }
 }
 
+data class Charge(
+  val from: AccountId, val to: AccountId, val value: EconomicValue
+)
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
@@ -506,7 +510,7 @@ class Economy {
     }
   }
 
-  fun transfer(transfer: Transfer): Transaction {
+  fun transfer(transfer: Transfer, charges: List<Charge> = emptyList()): Transaction {
     return write {
       require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
       requireAccount(transfer.from)
@@ -524,18 +528,42 @@ class Economy {
           }
         }
       }
+      for (charge in charges) {
+        require(charge.from != charge.to) { "Cannot charge to the same account" }
+        requireAccount(charge.from)
+        requireAccount(charge.to)
+        when (val value = charge.value) {
+          is EconomicValue.Monetary -> {
+            require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+              "Charge quantity must be non-negative"
+            }
+          }
+
+          is EconomicValue.Resource -> {
+            require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+              "Charge quantity must be non-negative"
+            }
+          }
+        }
+      }
+
       val operationId = nextOperationId()
       val transactionId = nextTransactionId()
-      val movement = Movement(from = transfer.from, to = transfer.to, value = transfer.value)
+      val movements = buildList {
+        add(Movement(from = transfer.from, to = transfer.to, value = transfer.value))
+        for (charge in charges) {
+          add(Movement(from = charge.from, to = charge.to, value = charge.value))
+        }
+      }
       val transaction = Transaction(
-        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+        id = transactionId, operationId = operationId, movements = movements, timestamp = Instant.now()
       )
       commit(transaction)
       transaction
     }
   }
 
-  fun exchange(exchange: Exchange): Transaction {
+  fun exchange(exchange: Exchange, charges: List<Charge> = emptyList()): Transaction {
     return write {
       for (transfer in exchange.transfers) {
         require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
@@ -555,11 +583,34 @@ class Economy {
           }
         }
       }
+      for (charge in charges) {
+        require(charge.from != charge.to) { "Cannot charge to the same account" }
+        requireAccount(charge.from)
+        requireAccount(charge.to)
+        when (val value = charge.value) {
+          is EconomicValue.Monetary -> {
+            require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+              "Charge quantity must be non-negative"
+            }
+          }
+
+          is EconomicValue.Resource -> {
+            require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+              "Charge quantity must be non-negative"
+            }
+          }
+        }
+      }
 
       val operationId = nextOperationId()
       val transactionId = nextTransactionId()
-      val movements = exchange.transfers.map { transfer ->
-        Movement(from = transfer.from, to = transfer.to, value = transfer.value)
+      val movements = buildList {
+        for (transfer in exchange.transfers) {
+          add(Movement(from = transfer.from, to = transfer.to, value = transfer.value))
+        }
+        for (charge in charges) {
+          add(Movement(from = charge.from, to = charge.to, value = charge.value))
+        }
       }
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = movements, timestamp = Instant.now()
