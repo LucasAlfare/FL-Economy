@@ -1048,7 +1048,7 @@ Then add the dependency:
 
 ```kotlin
 dependencies {
-  implementation("com.github.LucasAlfare:FL-Economy:1.0.1")
+  implementation("com.github.LucasAlfare:FL-Economy:1.2.0")
 }
 ```
 
