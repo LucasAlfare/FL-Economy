@@ -282,6 +282,14 @@ data class Transfer(
   val from: AccountId, val to: AccountId, val value: EconomicValue
 )
 
+data class Exchange(
+  val transfers: List<Transfer>
+) {
+  init {
+    require(transfers.isNotEmpty()) { "Exchange must contain at least one transfer" }
+  }
+}
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
@@ -521,6 +529,40 @@ class Economy {
       val movement = Movement(from = transfer.from, to = transfer.to, value = transfer.value)
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      commit(transaction)
+      transaction
+    }
+  }
+
+  fun exchange(exchange: Exchange): Transaction {
+    return write {
+      for (transfer in exchange.transfers) {
+        require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
+        requireAccount(transfer.from)
+        requireAccount(transfer.to)
+        when (val value = transfer.value) {
+          is EconomicValue.Monetary -> {
+            require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+              "Transfer quantity must be non-negative"
+            }
+          }
+
+          is EconomicValue.Resource -> {
+            require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+              "Transfer quantity must be non-negative"
+            }
+          }
+        }
+      }
+
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movements = exchange.transfers.map { transfer ->
+        Movement(from = transfer.from, to = transfer.to, value = transfer.value)
+      }
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = movements, timestamp = Instant.now()
       )
       commit(transaction)
       transaction
