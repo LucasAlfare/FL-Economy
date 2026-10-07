@@ -273,7 +273,7 @@ data class Transaction(
   val id: TransactionId, val operationId: OperationId, val movements: List<Movement>, val timestamp: Instant
 )
 
-class Ledger {
+internal class Ledger {
   private val transactions = mutableListOf<Transaction>()
 
   internal fun append(transaction: Transaction) {
@@ -333,23 +333,23 @@ class Economy {
   private val ledger = Ledger()
   private val loans = ConcurrentHashMap<LoanId, Loan>()
 
-  internal fun nextOperationId(): OperationId {
+  private fun nextOperationId(): OperationId {
     return OperationId(operationIdGenerator.incrementAndGet().toString())
   }
 
-  internal fun nextTransactionId(): TransactionId {
+  private fun nextTransactionId(): TransactionId {
     return TransactionId(transactionIdGenerator.incrementAndGet().toString())
   }
 
-  internal fun nextLoanId(): LoanId {
+  private fun nextLoanId(): LoanId {
     return LoanId(loanIdGenerator.incrementAndGet().toString())
   }
 
-  internal fun <T> read(block: () -> T): T {
+  private fun <T> read(block: () -> T): T {
     return lock.read { block() }
   }
 
-  internal fun <T> write(block: () -> T): T {
+  private fun <T> write(block: () -> T): T {
     return lock.write { block() }
   }
 
@@ -467,13 +467,11 @@ class Economy {
     }
   }
 
-  internal fun requireAccount(id: AccountId): Account {
+  private fun requireAccount(id: AccountId): Account {
     return accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
   }
 
-  internal fun getLedger(): Ledger = ledger
-
-  internal fun commit(transaction: Transaction) {
+  private fun commit(transaction: Transaction) {
     write {
       val pendingDeltas = mutableMapOf<AccountId, MutableList<Pair<EconomicValue, Boolean>>>()
 
