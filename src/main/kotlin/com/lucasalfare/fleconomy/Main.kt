@@ -118,6 +118,62 @@ data class Money(val quantity: Quantity, val currency: Currency) : Comparable<Mo
   }
 }
 
+data class ResourceRef(val type: String, val id: String) {
+  init {
+    require(type.isNotBlank()) { "Resource type cannot be blank" }
+    require(id.isNotBlank()) { "Resource id cannot be blank" }
+  }
+}
+
+data class ResourceAmount(val resource: ResourceRef, val quantity: Quantity) : Comparable<ResourceAmount> {
+
+  init {
+    require(quantity.value >= BigDecimal.ZERO)
+  }
+
+  operator fun plus(other: ResourceAmount): ResourceAmount {
+    require(resource == other.resource) { "Cannot add ResourceAmount of different resources: $resource and ${other.resource}" }
+    return ResourceAmount(resource, quantity + other.quantity)
+  }
+
+  operator fun minus(other: ResourceAmount): ResourceAmount {
+    require(resource == other.resource) { "Cannot subtract ResourceAmount of different resources: $resource and ${other.resource}" }
+    return ResourceAmount(resource, quantity - other.quantity)
+  }
+
+  override fun compareTo(other: ResourceAmount): Int {
+    require(resource == other.resource) { "Cannot compare ResourceAmount of different resources: $resource and ${other.resource}" }
+    return quantity.compareTo(other.quantity)
+  }
+
+  fun isZero(): Boolean = quantity.isZero()
+
+  fun isPositive(): Boolean = quantity.isPositive()
+
+  companion object {
+    fun of(type: String, id: String, amount: BigDecimal): ResourceAmount =
+      ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
+
+    fun of(type: String, id: String, amount: Long): ResourceAmount =
+      ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
+
+    fun of(type: String, id: String, amount: String): ResourceAmount =
+      ResourceAmount(ResourceRef(type, id), Quantity.of(amount))
+
+    fun of(resource: ResourceRef, amount: BigDecimal): ResourceAmount =
+      ResourceAmount(resource, Quantity.of(amount))
+
+    fun of(resource: ResourceRef, amount: Long): ResourceAmount =
+      ResourceAmount(resource, Quantity.of(amount))
+
+    fun of(resource: ResourceRef, amount: String): ResourceAmount =
+      ResourceAmount(resource, Quantity.of(amount))
+
+    fun zero(resource: ResourceRef): ResourceAmount =
+      ResourceAmount(resource, Quantity.ZERO)
+  }
+}
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
