@@ -284,7 +284,149 @@ Retorna `true` quando `paid >= principal + interest`.
 
 ---
 
-# 8. `Economy`
+# 8. Eventos e observabilidade
+
+A `Economy` expõe um sistema de eventos para que aplicações possam observar mudanças econômicas sem precisar consultar o
+estado repetidamente.
+
+Os eventos representam **fatos já ocorridos**. Eles somente são emitidos depois que a alteração correspondente foi
+efetivamente commitada.
+
+Os eventos são entregues de forma síncrona na thread que realizou a operação, mas somente depois da liberação do write
+lock.
+
+Falhas em listeners não desfazem nem invalidam uma operação econômica já commitada.
+
+---
+
+## `BalanceChange`
+
+Snapshot imutável de uma alteração de saldo.
+
+* `accountId: AccountId`
+* `previousBalance: Balance`
+* `newBalance: Balance`
+
+Representa a diferença entre o saldo anterior e o novo saldo de uma conta afetada por uma `Transaction`.
+
+---
+
+## `EconomyEvent`
+
+`sealed interface`
+
+Tipo base de todos os eventos emitidos por uma `Economy`.
+
+### `EconomyEvent.AccountCreated`
+
+Emitido quando uma conta é criada.
+
+* `accountId: AccountId`
+
+---
+
+### `EconomyEvent.TransactionCommitted`
+
+Emitido quando uma `Transaction` é efetivamente registrada no ledger.
+
+* `transaction: Transaction`
+* `balanceChanges: List<BalanceChange>`
+
+`balanceChanges` contém os snapshots anterior/novo das contas afetadas pela transação.
+
+Esse é o principal evento para observar movimentações econômicas.
+
+Ele cobre:
+
+* emissão;
+* retirada;
+* transferência;
+* exchange;
+* charges;
+* transferência de principal de empréstimo;
+* pagamentos de empréstimos.
+
+---
+
+### `EconomyEvent.LoanCreated`
+
+Emitido quando um novo empréstimo é criado com sucesso.
+
+* `loan: Loan`
+* `transaction: Transaction`
+
+`transaction` é a transação que transferiu o principal do creditor para o debtor.
+
+Durante `createLoan`, os eventos são emitidos na ordem:
+
+1. `TransactionCommitted`
+2. `LoanCreated`
+
+---
+
+### `EconomyEvent.LoanPaid`
+
+Emitido quando um pagamento de empréstimo é efetivamente realizado.
+
+* `previousLoan: Loan`
+* `loan: Loan`
+* `transaction: Transaction`
+
+`previousLoan` representa o empréstimo imediatamente antes do pagamento.
+
+`loan` representa o estado imediatamente depois do pagamento.
+
+`transaction` representa a transferência do pagamento entre debtor e creditor.
+
+Durante `payLoan`, os eventos são emitidos na ordem:
+
+1. `TransactionCommitted`
+2. `LoanPaid`
+
+Se o pagamento quitar completamente o empréstimo, `loan.state` será `PAID`.
+
+---
+
+### `EconomyEvent.LoanDefaulted`
+
+Emitido quando um empréstimo `OPEN` é marcado como `DEFAULTED`.
+
+* `previousLoan: Loan`
+* `loan: Loan`
+
+Não há alteração de saldo nem `Transaction` associada ao default.
+
+---
+
+## `EconomyEventListener`
+
+Observer funcional para receber eventos.
+
+API:
+
+`onEvent(event: EconomyEvent)`
+
+Pode ser usado para observar todos os eventos de uma `Economy`.
+
+---
+
+## `EconomySubscription`
+
+Handle retornado por uma inscrição de eventos.
+
+### `unsubscribe()`
+
+Remove a inscrição.
+
+É idempotente: chamar mais de uma vez não produz efeito adicional.
+
+### `isActive(): Boolean`
+
+Retorna `true` enquanto a inscrição estiver registrada.
+
+---
+
+# 9. `Economy`
 
 Núcleo da biblioteca.
 
@@ -296,6 +438,36 @@ Cada `Economy` é totalmente independente das demais.
 
 ---
 
+## Observação de eventos
+
+`subscribe(listener: EconomyEventListener): EconomySubscription`
+
+Registra um listener para todos os eventos da `Economy`.
+
+Os eventos são entregues na ordem de registro dos listeners.
+
+Exemplo conceitual:
+
+`economy.subscribe { event -> ... }`
+
+---
+
+`subscribe<E : EconomyEvent>(listener: (E) -> Unit): EconomySubscription`
+
+Registra um listener somente para um tipo específico de `EconomyEvent`.
+
+Permite observar diretamente, por exemplo:
+
+* `EconomyEvent.AccountCreated`
+* `EconomyEvent.TransactionCommitted`
+* `EconomyEvent.LoanCreated`
+* `EconomyEvent.LoanPaid`
+* `EconomyEvent.LoanDefaulted`
+
+O retorno é um `EconomySubscription`, que pode ser usado para cancelar a observação.
+
+---
+
 ## Contas
 
 `createAccount(id): Account`
@@ -303,6 +475,10 @@ Cada `Economy` é totalmente independente das demais.
 Cria conta vazia.
 
 ID duplicado → `IllegalArgumentException`.
+
+Em caso de sucesso, emite:
+
+`EconomyEvent.AccountCreated`
 
 `getAccount(id): Account?`
 
@@ -346,7 +522,7 @@ Conta inexistente → `IllegalArgumentException`.
 
 ---
 
-# 9. Ledger
+# 10. Ledger
 
 O ledger é append-only.
 
@@ -366,9 +542,13 @@ Busca por ID.
 
 Retorna as transações pertencentes à mesma `OperationId`.
 
+Toda `Transaction` efetivamente commitada gera:
+
+`EconomyEvent.TransactionCommitted`
+
 ---
 
-# 10. Emissão e retirada
+# 11. Emissão e retirada
 
 ### `issue(to, value): Transaction`
 
@@ -386,6 +566,10 @@ Gera automaticamente:
 
 É atômico.
 
+Após o commit, emite:
+
+`EconomyEvent.TransactionCommitted`
+
 ---
 
 ### `retire(from, value): Transaction`
@@ -398,9 +582,13 @@ Exige saldo/recurso suficiente.
 
 É atômico.
 
+Após o commit, emite:
+
+`EconomyEvent.TransactionCommitted`
+
 ---
 
-# 11. Transferência
+# 12. Transferência
 
 ### `transfer(transfer, charges = emptyList()): Transaction`
 
@@ -418,11 +606,15 @@ Valida:
 * valores não negativos;
 * saldo suficiente para todos os débitos.
 
-Falha em qualquer validação → nenhuma alteração de saldo.
+Falha em qualquer validação → nenhuma alteração de saldo e nenhum evento de sucesso.
+
+Após o commit, emite:
+
+`EconomyEvent.TransactionCommitted`
 
 ---
 
-# 12. Exchange
+# 13. Exchange
 
 ### `exchange(exchange, charges = emptyList()): Transaction`
 
@@ -430,16 +622,20 @@ Executa múltiplas transferências e charges como uma única operação atômica
 
 Todas as movimentações são validadas antes da aplicação.
 
-Falha em qualquer etapa → nenhum saldo é alterado.
+Falha em qualquer etapa → nenhum saldo é alterado e nenhum evento de sucesso é emitido.
 
 A ordem dos `Movement` na `Transaction` é:
 
 1. transfers do `Exchange`;
 2. charges.
 
+Após o commit, emite:
+
+`EconomyEvent.TransactionCommitted`
+
 ---
 
-# 13. Empréstimos
+# 14. Empréstimos
 
 ### `createLoan(...)`
 
@@ -466,6 +662,13 @@ Ao criar:
 3. `paid` começa em zero.
 
 A transferência do principal gera uma `Transaction` normal no ledger.
+
+Eventos emitidos, nesta ordem:
+
+1. `EconomyEvent.TransactionCommitted`
+2. `EconomyEvent.LoanCreated`
+
+`LoanCreated.transaction` referencia a `Transaction` responsável pela transferência do principal.
 
 ---
 
@@ -508,6 +711,13 @@ Depois do pagamento:
 * se totalmente quitado → `PAID`;
 * caso contrário → permanece `OPEN`.
 
+Eventos emitidos, nesta ordem:
+
+1. `EconomyEvent.TransactionCommitted`
+2. `EconomyEvent.LoanPaid`
+
+`LoanPaid` fornece tanto o estado anterior quanto o estado atualizado do empréstimo.
+
 ---
 
 ### `defaultLoan(loanId): Loan`
@@ -516,17 +726,25 @@ Marca empréstimo `OPEN` como `DEFAULTED`.
 
 Não altera saldos.
 
+Não cria `Transaction`.
+
+Após a alteração, emite:
+
+`EconomyEvent.LoanDefaulted`
+
 As consequências econômicas de um default ficam por conta da aplicação.
 
 ---
 
-# 14. Juros
+# 15. Juros
 
 ### `Interest`
 
 Objeto utilitário puro.
 
 Não modifica contas, loans ou ledger.
+
+Também não produz eventos.
 
 ### `Interest.simple(principal, rate, periods): Money`
 
@@ -562,7 +780,7 @@ Retorna zero para `periods = 0` ou principal zero.
 
 ---
 
-# 15. Atomicidade
+# 16. Atomicidade e eventos
 
 Toda operação mutável da `Economy` é atômica em relação à instância inteira.
 
@@ -570,14 +788,22 @@ O mecanismo:
 
 1. valida todas as movimentações;
 2. calcula saldos projetados;
-3. somente depois altera as contas;
-4. adiciona a `Transaction` ao ledger.
+3. altera as contas;
+4. adiciona a `Transaction` ao ledger;
+5. atualiza outras entidades necessárias, como `Loan`;
+6. libera o write lock;
+7. somente então publica os eventos correspondentes.
 
-Portanto nenhuma operação parcialmente aplicada fica visível para outros leitores.
+Portanto:
+
+* nenhum evento de sucesso é emitido para uma operação que falhou;
+* listeners nunca observam um estado parcialmente commitado;
+* uma exceção em um listener não desfaz a operação econômica;
+* eventos são fatos posteriores à mudança, não parte da transação econômica.
 
 ---
 
-# 16. Modelo mental rápido
+# 17. Modelo mental rápido
 
 ### Valor
 
@@ -598,6 +824,18 @@ Portanto nenhuma operação parcialmente aplicada fica visível para outros leit
 ### Registro
 
 `Transaction → Ledger`
+
+### Observabilidade
+
+`Economy → EconomyEvent → EconomyEventListener`
+
+### Mudança de saldo
+
+`BalanceChange`
+
+### Inscrição
+
+`subscribe() → EconomySubscription`
 
 ### Crédito
 
@@ -625,5 +863,5 @@ Portanto nenhuma operação parcialmente aplicada fica visível para outros leit
 
 ### Regra central
 
-**A aplicação define o significado econômico; `Economy` garante armazenamento, validação, atomicidade, concorrência e
-histórico.**
+**A aplicação define o significado econômico; `Economy` garante armazenamento, validação, atomicidade, concorrência,
+histórico e observabilidade.**
