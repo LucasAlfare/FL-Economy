@@ -620,3 +620,26 @@ class Economy {
     }
   }
 }
+
+object Interest {
+  fun simple(principal: Money, rate: Quantity, periods: Int): Money {
+    require(periods >= 0) { "Periods must be non-negative" }
+    if (periods == 0 || principal.isZero() || rate.isZero()) {
+      return Money.zero(principal.currency)
+    }
+    val interestQuantity = Quantity.of(principal.quantity.value * rate.value * BigDecimal.valueOf(periods.toLong()))
+    return Money(interestQuantity, principal.currency)
+  }
+
+  fun compound(principal: Money, rate: Quantity, periods: Int): Money {
+    require(periods >= 0) { "Periods must be non-negative" }
+    if (periods == 0 || principal.isZero()) return Money.zero(principal.currency)
+    if (rate.isZero()) return Money.zero(principal.currency)
+    val onePlusRate = BigDecimal.ONE + rate.value
+    val factor = onePlusRate.pow(periods)
+    val finalAmount = principal.quantity.value * factor
+    val interestValue = finalAmount - principal.quantity.value
+    require(interestValue >= BigDecimal.ZERO) { "Compound interest calculation produced negative result" }
+    return Money(Quantity.of(interestValue), principal.currency)
+  }
+}
