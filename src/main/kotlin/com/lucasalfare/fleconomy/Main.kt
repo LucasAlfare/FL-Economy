@@ -278,6 +278,10 @@ class Ledger {
   fun size(): Int = transactions.size
 }
 
+data class Transfer(
+  val from: AccountId, val to: AccountId, val value: EconomicValue
+)
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
@@ -486,6 +490,35 @@ class Economy {
       val operationId = nextOperationId()
       val transactionId = nextTransactionId()
       val movement = Movement(from = from, to = null, value = value)
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      commit(transaction)
+      transaction
+    }
+  }
+
+  fun transfer(transfer: Transfer): Transaction {
+    return write {
+      require(transfer.from != transfer.to) { "Cannot transfer to the same account" }
+      requireAccount(transfer.from)
+      requireAccount(transfer.to)
+      when (val value = transfer.value) {
+        is EconomicValue.Monetary -> {
+          require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+            "Transfer quantity must be non-negative"
+          }
+        }
+
+        is EconomicValue.Resource -> {
+          require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+            "Transfer quantity must be non-negative"
+          }
+        }
+      }
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movement = Movement(from = transfer.from, to = transfer.to, value = transfer.value)
       val transaction = Transaction(
         id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
       )
