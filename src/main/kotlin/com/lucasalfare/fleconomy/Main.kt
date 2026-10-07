@@ -439,4 +439,58 @@ class Economy {
       ledger.append(transaction)
     }
   }
+
+  fun issue(to: AccountId, value: EconomicValue): Transaction {
+    return write {
+      requireAccount(to)
+      when (value) {
+        is EconomicValue.Monetary -> {
+          require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+            "Issuance quantity must be non-negative"
+          }
+        }
+
+        is EconomicValue.Resource -> {
+          require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+            "Issuance quantity must be non-negative"
+          }
+        }
+      }
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movement = Movement(from = null, to = to, value = value)
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      commit(transaction)
+      transaction
+    }
+  }
+
+  fun retire(from: AccountId, value: EconomicValue): Transaction {
+    return write {
+      requireAccount(from)
+      when (value) {
+        is EconomicValue.Monetary -> {
+          require(value.money.quantity.isPositive() || value.money.quantity.isZero()) {
+            "Retirement quantity must be non-negative"
+          }
+        }
+
+        is EconomicValue.Resource -> {
+          require(value.amount.quantity.isPositive() || value.amount.quantity.isZero()) {
+            "Retirement quantity must be non-negative"
+          }
+        }
+      }
+      val operationId = nextOperationId()
+      val transactionId = nextTransactionId()
+      val movement = Movement(from = from, to = null, value = value)
+      val transaction = Transaction(
+        id = transactionId, operationId = operationId, movements = listOf(movement), timestamp = Instant.now()
+      )
+      commit(transaction)
+      transaction
+    }
+  }
 }
