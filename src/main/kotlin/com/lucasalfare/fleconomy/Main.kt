@@ -31,6 +31,13 @@ value class OperationId(val value: String) {
   }
 }
 
+@JvmInline
+value class LoanId(val value: String) {
+  init {
+    require(value.isNotBlank()) { "LoanId cannot be blank" }
+  }
+}
+
 class Quantity private constructor(val value: BigDecimal) : Comparable<Quantity> {
 
   init {
@@ -294,12 +301,33 @@ data class Charge(
   val from: AccountId, val to: AccountId, val value: EconomicValue
 )
 
+enum class LoanState {
+  OPEN, PAID, DEFAULTED
+}
+
+data class Loan(
+  val id: LoanId,
+  val creditor: AccountId,
+  val debtor: AccountId,
+  val principal: Money,
+  val interest: Money,
+  val dueDate: Instant,
+  val paid: Money,
+  val state: LoanState
+) {
+  fun amountDue(): Money = principal + interest - paid
+
+  fun isFullyPaid(): Boolean = paid >= principal + interest
+}
+
 class Economy {
   private val lock = ReentrantReadWriteLock()
   private val operationIdGenerator = AtomicLong(0)
   private val transactionIdGenerator = AtomicLong(0)
+  private val loanIdGenerator = AtomicLong(0)
   private val accounts = ConcurrentHashMap<AccountId, Account>()
   private val ledger = Ledger()
+  private val loans = ConcurrentHashMap<LoanId, Loan>()
 
   internal fun nextOperationId(): OperationId {
     return OperationId(operationIdGenerator.incrementAndGet().toString())
@@ -307,6 +335,10 @@ class Economy {
 
   internal fun nextTransactionId(): TransactionId {
     return TransactionId(transactionIdGenerator.incrementAndGet().toString())
+  }
+
+  internal fun nextLoanId(): LoanId {
+    return LoanId(loanIdGenerator.incrementAndGet().toString())
   }
 
   internal fun <T> read(block: () -> T): T {
@@ -345,6 +377,24 @@ class Economy {
 
   fun ledgerHistory(): List<Transaction> {
     return read { ledger.history() }
+  }
+
+  fun getLoan(id: LoanId): Loan? {
+    return read { loans[id] }
+  }
+
+  fun loanExists(id: LoanId): Boolean {
+    return read { loans.containsKey(id) }
+  }
+
+  fun loansOf(accountId: AccountId): List<Loan> {
+    return read {
+      loans.values.filter { it.creditor == accountId || it.debtor == accountId }
+    }
+  }
+
+  fun allLoans(): List<Loan> {
+    return read { loans.values.toList() }
   }
 
   internal fun requireAccount(id: AccountId): Account {
@@ -617,6 +667,78 @@ class Economy {
       )
       commit(transaction)
       transaction
+    }
+  }
+
+  fun createLoan(
+    creditor: AccountId, debtor: AccountId, principal: Money, interest: Money, dueDate: Instant
+  ): Loan {
+    return write {
+      require(creditor != debtor) { "Creditor and debtor cannot be the same account" }
+      requireAccount(creditor)
+      requireAccount(debtor)
+      require(principal.currency == interest.currency) {
+        "Principal and interest must use the same currency"
+      }
+      require(principal.isPositive()) { "Principal must be positive" }
+      require(interest.quantity.value >= BigDecimal.ZERO) { "Interest must be non-negative" }
+
+      val transfer = Transfer(
+        from = creditor, to = debtor, value = EconomicValue.of(principal)
+      )
+      val transaction = transfer(transfer)
+      val loanId = nextLoanId()
+      val loan = Loan(
+        id = loanId,
+        creditor = creditor,
+        debtor = debtor,
+        principal = principal,
+        interest = interest,
+        dueDate = dueDate,
+        paid = Money.zero(principal.currency),
+        state = LoanState.OPEN
+      )
+      loans[loanId] = loan
+      loan
+    }
+  }
+
+  fun payLoan(loanId: LoanId, amount: Money): Loan {
+    return write {
+      val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
+      require(loan.state == LoanState.OPEN) { "Loan is not open: ${loan.state}" }
+      require(amount.currency == loan.principal.currency) {
+        "Payment currency must match loan currency"
+      }
+      require(amount.isPositive()) { "Payment amount must be positive" }
+
+      val due = loan.amountDue()
+      require(amount <= due) { "Payment exceeds amount due: ${amount.quantity} > ${due.quantity}" }
+
+      val transfer = Transfer(
+        from = loan.debtor, to = loan.creditor, value = EconomicValue.of(amount)
+      )
+      transfer(transfer)
+
+      val newPaid = loan.paid + amount
+      val newState = if (newPaid >= loan.principal + loan.interest) {
+        LoanState.PAID
+      } else {
+        LoanState.OPEN
+      }
+      val updated = loan.copy(paid = newPaid, state = newState)
+      loans[loanId] = updated
+      updated
+    }
+  }
+
+  fun defaultLoan(loanId: LoanId): Loan {
+    return write {
+      val loan = loans[loanId] ?: throw IllegalArgumentException("Loan does not exist: ${loanId.value}")
+      require(loan.state == LoanState.OPEN) { "Loan is not open: ${loan.state}" }
+      val updated = loan.copy(state = LoanState.DEFAULTED)
+      loans[loanId] = updated
+      updated
     }
   }
 }
