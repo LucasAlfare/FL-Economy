@@ -2,18 +2,20 @@
 
 ### A small, atomic, thread-safe economic kernel for Kotlin/JVM.
 
-[![Kotlin](https://img.shields.io/badge/Kotlin-Pure%20Kotlin-7F52FF.svg?logo=kotlin)](https://kotlinlang.org/)
-[![JVM](https://img.shields.io/badge/Platform-Kotlin%2FJVM-000000.svg?logo=openjdk)]
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![JitPack](https://jitpack.io/v/<GITHUB_USER>/<GITHUB_REPOSITORY>.svg)](https://jitpack.io/#<GITHUB_USER>/<GITHUB_REPOSITORY>)
+[![Kotlin](https://img.shields.io/badge/Kotlin-100%25-blueviolet?logo=kotlin)](https://kotlinlang.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![](https://jitpack.io/v/LucasAlfare/FL-Economy.svg)](https://jitpack.io/#LucasAlfare/FL-Economy)
 
 **FL Economy** is a lightweight in-memory economic library written in pure Kotlin.
 
-It provides the mechanics required to represent and move economic value without imposing domain-specific rules on the application.
+It provides the mechanics required to represent and move economic value without imposing domain-specific rules on the
+application.
 
 > **“The library knows how value moves. The application knows what that value means.”**
 
-The core can be used to build economies for games, simulations, applications, services, virtual worlds, or any system that needs accounts, balances, resources, transfers, exchanges, charges, interest, loans, and an immutable transaction history.
+The core can be used to build economies for games, simulations, applications, services, virtual worlds, or any system
+that needs accounts, balances, resources, transfers, exchanges, charges, interest, loans, and an immutable transaction
+history.
 
 ---
 
@@ -74,7 +76,8 @@ can represent a sword.
 
 Both are simply economic resources as far as the core is concerned.
 
-This keeps the library reusable without forcing the application into a predefined game model, banking model, inventory model, marketplace, ownership system, or taxation system.
+This keeps the library reusable without forcing the application into a predefined game model, banking model, inventory
+model, marketplace, ownership system, or taxation system.
 
 ---
 
@@ -109,6 +112,8 @@ There is simply an in-memory economic engine with a small composable model.
 Money is represented using `BigDecimal` through the `Quantity` type.
 
 There is no `Double` or `Float` for monetary values.
+
+> Important: we didn't implemented any abstraction related to Database yet! All of this are ready to work on memory.
 
 Currencies are explicit and opaque:
 
@@ -410,8 +415,8 @@ Value creation is explicit.
 ```kotlin
 
 economy.issue(
-    to = alice,
-    value = EconomicValue.of(Money.of(500L, gold))
+  to = alice,
+  value = EconomicValue.of(Money.of(500L, gold))
 )
 ```
 
@@ -431,11 +436,11 @@ A normal transfer moves value from one account to another without creating or de
 
 ```kotlin
 economy.transfer(
-    Transfer(
-        from = alice,
-        to = bob,
-        value = EconomicValue.of(Money.of(100L, gold))
-    )
+  Transfer(
+    from = alice,
+    to = bob,
+    value = EconomicValue.of(Money.of(100L, gold))
+  )
 )
 ```
 
@@ -455,8 +460,8 @@ Value destruction is also explicit.
 
 ```kotlin
 economy.retire(
-    from = bob,
-    value = EconomicValue.of(Money.of(25L, gold))
+  from = bob,
+  value = EconomicValue.of(Money.of(25L, gold))
 )
 ```
 
@@ -480,8 +485,8 @@ Create a resource reference:
 import com.lucasalfare.fleconomy.ResourceRef
 
 val sword = ResourceRef(
-    type = "sword",
-    id = "42"
+  type = "sword",
+  id = "42"
 )
 ```
 
@@ -497,8 +502,8 @@ It can then participate in normal economic operations:
 
 ```kotlin
 economy.issue(
-    to = alice,
-    value = EconomicValue.of(swordAmount)
+  to = alice,
+  value = EconomicValue.of(swordAmount)
 )
 ```
 
@@ -517,18 +522,18 @@ import com.lucasalfare.fleconomy.Exchange
 import com.lucasalfare.fleconomy.Transfer
 
 val exchange = Exchange(
-    transfers = listOf(
-        Transfer(
-            from = alice,
-            to = bob,
-            value = EconomicValue.of(Money.of(100L, gold))
-        ),
-        Transfer(
-            from = bob,
-            to = alice,
-            value = EconomicValue.of(swordAmount)
-        )
+  transfers = listOf(
+    Transfer(
+      from = alice,
+      to = bob,
+      value = EconomicValue.of(Money.of(100L, gold))
+    ),
+    Transfer(
+      from = bob,
+      to = alice,
+      value = EconomicValue.of(swordAmount)
     )
+  )
 )
 
 economy.exchange(exchange)
@@ -551,18 +556,18 @@ val treasury = AccountId("treasury")
 economy.createAccount(treasury)
 
 economy.transfer(
-    transfer = Transfer(
-        from = alice,
-        to = bob,
-        value = EconomicValue.of(Money.of(100L, gold))
-    ),
-    charges = listOf(
-        Charge(
-            from = alice,
-            to = treasury,
-            value = EconomicValue.of(Money.of(5L, gold))
-        )
+  transfer = Transfer(
+    from = alice,
+    to = bob,
+    value = EconomicValue.of(Money.of(100L, gold))
+  ),
+  charges = listOf(
+    Charge(
+      from = alice,
+      to = treasury,
+      value = EconomicValue.of(Money.of(5L, gold))
     )
+  )
 )
 ```
 
@@ -570,7 +575,8 @@ The transfer and charge belong to the same transaction.
 
 The core does not classify the `Charge`.
 
-Your application can decide that the movement represents a fee, tax, commission, penalty, service charge, or another concept.
+Your application can decide that the movement represents a fee, tax, commission, penalty, service charge, or another
+concept.
 
 ---
 
@@ -585,9 +591,9 @@ import com.lucasalfare.fleconomy.Interest
 import com.lucasalfare.fleconomy.Quantity
 
 val interest = Interest.simple(
-    principal = Money.of("1000", gold),
-    rate = Quantity.of("0.05"),
-    periods = 3
+  principal = Money.of("1000", gold),
+  rate = Quantity.of("0.05"),
+  periods = 3
 )
 ```
 
@@ -603,9 +609,9 @@ principal × rate × periods
 
 ```kotlin
 val interest = Interest.compound(
-    principal = Money.of("1000", gold),
-    rate = Quantity.of("0.05"),
-    periods = 3
+  principal = Money.of("1000", gold),
+  rate = Quantity.of("0.05"),
+  periods = 3
 )
 ```
 
@@ -635,8 +641,8 @@ economy.createAccount(creditor)
 economy.createAccount(debtor)
 
 economy.issue(
-    to = creditor,
-    value = EconomicValue.of(Money.of(10_000L, gold))
+  to = creditor,
+  value = EconomicValue.of(Money.of(10_000L, gold))
 )
 ```
 
@@ -646,11 +652,11 @@ Create the loan:
 import java.time.Instant
 
 val loan = economy.createLoan(
-    creditor = creditor,
-    debtor = debtor,
-    principal = Money.of(1_000L, gold),
-    interest = Money.of(100L, gold),
-    dueDate = Instant.now().plusSeconds(30 * 24 * 60 * 60)
+  creditor = creditor,
+  debtor = debtor,
+  principal = Money.of(1_000L, gold),
+  interest = Money.of(100L, gold),
+  dueDate = Instant.now().plusSeconds(30 * 24 * 60 * 60)
 )
 ```
 
@@ -672,8 +678,8 @@ OPEN
 
 ```kotlin
 val updatedLoan = economy.payLoan(
-    loanId = loan.id,
-    amount = Money.of(500L, gold)
+  loanId = loan.id,
+  amount = Money.of(500L, gold)
 )
 ```
 
@@ -822,7 +828,8 @@ A multi-account operation does not acquire independent account locks.
 
 This avoids lock-ordering complexity and makes the consistency boundary explicit.
 
-The same commit mechanism is used for economic operations instead of allowing individual operations to implement their own synchronization strategy.
+The same commit mechanism is used for economic operations instead of allowing individual operations to implement their
+own synchronization strategy.
 
 ---
 
@@ -839,7 +846,8 @@ economy.issue(...)
 economy.retire(...)
 ```
 
-They can therefore be called normally from coroutine-based applications without introducing a second asynchronous architecture into the economic core.
+They can therefore be called normally from coroutine-based applications without introducing a second asynchronous
+architecture into the economic core.
 
 The library does not create or own:
 
@@ -904,7 +912,7 @@ Consumers observe snapshots and immutable transaction records rather than mutabl
 # API overview
 
 | Type             | Responsibility                                       |
-| ---------------- | ---------------------------------------------------- |
+|------------------|------------------------------------------------------|
 | `Economy`        | Central economic engine and consistency boundary     |
 | `Account`        | Economic point with encapsulated mutable state       |
 | `AccountId`      | Opaque account identifier                            |
@@ -1040,7 +1048,7 @@ Then add the dependency:
 
 ```kotlin
 dependencies {
-  implementation("com.github.<GITHUB_USER>:<GITHUB_REPOSITORY>:<VERSION_OR_TAG>")
+  implementation("com.github.LucasAlfare:FL-Economy:1.0.0")
 }
 ```
 
@@ -1048,24 +1056,6 @@ Import the library normally:
 
 ```kotlin
 import com.lucasalfare.fleconomy.*
-```
-
-### JitPack coordinates
-
-Replace the placeholders above with the repository's actual JitPack coordinates after publication:
-
-```text
-GitHub repository:
-<GITHUB_REPOSITORY_URL>
-
-JitPack:
-<JITPACK_PROJECT_URL>
-
-Latest version:
-<JITPACK_VERSION>
-
-Dependency:
-com.github.<GITHUB_USER>:<GITHUB_REPOSITORY>:<VERSION_OR_TAG>
 ```
 
 ---
@@ -1076,86 +1066,87 @@ The following example combines accounts, money, issuance, transfers, resources, 
 
 ```kotlin
 fun main() {
-    val economy = Economy()
+  val economy = Economy()
 
-    val alice = AccountId("alice")
-    val bob = AccountId("bob")
-    val treasury = AccountId("treasury")
+  val alice = AccountId("alice")
+  val bob = AccountId("bob")
+  val treasury = AccountId("treasury")
 
-    economy.createAccount(alice)
-    economy.createAccount(bob)
-    economy.createAccount(treasury)
+  economy.createAccount(alice)
+  economy.createAccount(bob)
+  economy.createAccount(treasury)
 
-    val gold = Currency("GOLD")
-    val sword = ResourceRef("sword", "42")
+  val gold = Currency("GOLD")
+  val sword = ResourceRef("sword", "42")
 
-    // Create value.
-    economy.issue(
-        to = alice,
-        value = EconomicValue.of(Money.of(1_000L, gold))
+  // Create value.
+  economy.issue(
+    to = alice,
+    value = EconomicValue.of(Money.of(1_000L, gold))
+  )
+
+  // Create a resource.
+  economy.issue(
+    to = bob,
+    value = EconomicValue.of(ResourceAmount.of(sword, 1L))
+  )
+
+  // Transfer money with a charge.
+  economy.transfer(
+    transfer = Transfer(
+      from = alice,
+      to = bob,
+      value = EconomicValue.of(Money.of(250L, gold))
+    ),
+    charges = listOf(
+      Charge(
+        from = alice,
+        to = treasury,
+        value = EconomicValue.of(Money.of(10L, gold))
+      )
     )
+  )
 
-    // Create a resource.
-    economy.issue(
-        to = bob,
-        value = EconomicValue.of(ResourceAmount.of(sword, 1L))
-    )
-
-    // Transfer money with a charge.
-    economy.transfer(
-        transfer = Transfer(
-            from = alice,
-            to = bob,
-            value = EconomicValue.of(Money.of(250L, gold))
+  // Exchange money for a resource.
+  economy.exchange(
+    Exchange(
+      transfers = listOf(
+        Transfer(
+          from = alice,
+          to = bob,
+          value = EconomicValue.of(Money.of(100L, gold))
         ),
-        charges = listOf(
-            Charge(
-                from = alice,
-                to = treasury,
-                value = EconomicValue.of(Money.of(10L, gold))
-            )
+        Transfer(
+          from = bob,
+          to = alice,
+          value = EconomicValue.of(ResourceAmount.of(sword, 1L))
         )
+      )
     )
+  )
 
-    // Exchange money for a resource.
-    economy.exchange(
-        Exchange(
-            transfers = listOf(
-                Transfer(
-                    from = alice,
-                    to = bob,
-                    value = EconomicValue.of(Money.of(100L, gold))
-                ),
-                Transfer(
-                    from = bob,
-                    to = alice,
-                    value = EconomicValue.of(ResourceAmount.of(sword, 1L))
-                )
-            )
-        )
-    )
+  // Pure interest calculation.
+  val interest = Interest.simple(
+    principal = Money.of(1_000L, gold),
+    rate = Quantity.of("0.05"),
+    periods = 2
+  )
 
-    // Pure interest calculation.
-    val interest = Interest.simple(
-        principal = Money.of(1_000L, gold),
-        rate = Quantity.of("0.05"),
-        periods = 2
-    )
-
-    // Create a loan.
-    economy.createLoan(
-        creditor = alice,
-        debtor = bob,
-        principal = Money.of(100L, gold),
-        interest = interest,
-        dueDate = Instant.now().plusSeconds(86_400)
-    )
+  // Create a loan.
+  economy.createLoan(
+    creditor = alice,
+    debtor = bob,
+    principal = Money.of(100L, gold),
+    interest = interest,
+    dueDate = Instant.now().plusSeconds(86_400)
+  )
 }
 ```
 
 The important part is not the specific example.
 
-The important part is that the application can construct larger economic systems by **composing the primitives provided by the core**.
+The important part is that the application can construct larger economic systems by **composing the primitives provided
+by the core**.
 
 ---
 
@@ -1187,7 +1178,8 @@ The first version focuses exclusively on deterministic local economic state.
 
 ### Composition over framework behavior
 
-Applications build richer systems by combining simple economic primitives rather than extending a giant domain framework.
+Applications build richer systems by combining simple economic primitives rather than extending a giant domain
+framework.
 
 ---
 
@@ -1201,7 +1193,8 @@ The main public model lives in the package:
 com.lucasalfare.fleconomy
 ```
 
-Core concepts are represented directly as Kotlin types rather than being distributed across a large hierarchy of infrastructure components.
+Core concepts are represented directly as Kotlin types rather than being distributed across a large hierarchy of
+infrastructure components.
 
 ---
 
@@ -1209,7 +1202,8 @@ Core concepts are represented directly as Kotlin types rather than being distrib
 
 FL Economy targets the **Kotlin/JVM** ecosystem.
 
-It is designed to integrate directly with ordinary Kotlin applications and coroutine-based applications without requiring coroutine-specific APIs.
+It is designed to integrate directly with ordinary Kotlin applications and coroutine-based applications without
+requiring coroutine-specific APIs.
 
 ---
 
@@ -1230,7 +1224,8 @@ Contributions are welcome when they preserve the project's core philosophy:
 
 New functionality should favor small, composable primitives over domain-specific abstractions.
 
-The core should remain lightweight, dependency-free, and independent from any particular game, business model, or persistence technology.
+The core should remain lightweight, dependency-free, and independent from any particular game, business model, or
+persistence technology.
 
 ---
 
