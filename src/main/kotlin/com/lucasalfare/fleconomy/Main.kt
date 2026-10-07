@@ -283,6 +283,10 @@ class Ledger {
   fun history(): List<Transaction> = transactions.toList()
 
   fun size(): Int = transactions.size
+
+  fun get(id: TransactionId): Transaction? = transactions.find { it.id == id }
+
+  fun byOperation(operationId: OperationId): List<Transaction> = transactions.filter { it.operationId == operationId }
 }
 
 data class Transfer(
@@ -368,6 +372,14 @@ class Economy {
     return read { accounts.containsKey(id) }
   }
 
+  fun accountIds(): Set<AccountId> {
+    return read { accounts.keys.toSet() }
+  }
+
+  fun accounts(): List<AccountId> {
+    return read { accounts.keys.toList() }
+  }
+
   fun balanceOf(id: AccountId): Balance {
     return read {
       val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
@@ -375,8 +387,60 @@ class Economy {
     }
   }
 
+  fun balances(): Map<AccountId, Balance> {
+    return read {
+      accounts.mapValues { it.value.balance() }
+    }
+  }
+
+  fun currencies(): Set<Currency> {
+    return read {
+      val result = mutableSetOf<Currency>()
+      for (account in accounts.values) {
+        result.addAll(account.balance().moneys.keys)
+      }
+      result.toSet()
+    }
+  }
+
+  fun currenciesOf(id: AccountId): Set<Currency> {
+    return read {
+      val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
+      account.balance().moneys.keys.toSet()
+    }
+  }
+
+  fun resources(): Set<ResourceRef> {
+    return read {
+      val result = mutableSetOf<ResourceRef>()
+      for (account in accounts.values) {
+        result.addAll(account.balance().resources.keys)
+      }
+      result.toSet()
+    }
+  }
+
+  fun resourcesOf(id: AccountId): Set<ResourceRef> {
+    return read {
+      val account = accounts[id] ?: throw IllegalArgumentException("Account does not exist: ${id.value}")
+      account.balance().resources.keys.toSet()
+    }
+  }
+
   fun ledgerHistory(): List<Transaction> {
     return read { ledger.history() }
+  }
+
+  fun ledgerSize(): Int {
+    return read { ledger.size() }
+  }
+
+  fun getTransaction(id: TransactionId): Transaction? {
+    return read { ledger.get(id) }
+  }
+
+  fun transactionsByOperation(operationId: OperationId): List<Transaction> {
+    return read { ledger.byOperation(operationId) }
   }
 
   fun getLoan(id: LoanId): Loan? {
@@ -395,6 +459,12 @@ class Economy {
 
   fun allLoans(): List<Loan> {
     return read { loans.values.toList() }
+  }
+
+  fun loansByState(state: LoanState): List<Loan> {
+    return read {
+      loans.values.filter { it.state == state }
+    }
   }
 
   internal fun requireAccount(id: AccountId): Account {
