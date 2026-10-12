@@ -1,867 +1,374 @@
-# FL-Economy — Referência Rápida da API
+# Sumário da API Pública
 
-**Package:** `com.lucasalfare.fleconomy`
+## Visão Geral
 
-## 1. Identificadores
+Biblioteca Kotlin para modelagem econômica thread-safe e em memória (`fleconomy`). Suporta contas que guardam dinheiro e
+recursos, operações atômicas (emissão, aposentadoria, transferência, troca multi-perna), taxas/cargos opcionais,
+empréstimos com pagamento e default, ledger append-only, snapshots consistentes e observação síncrona de eventos. Todas
+as mutações são atômicas em relação à instância de `Economy`; leitores concorrentes são permitidos, escritores são
+exclusivos.
 
-### `AccountId`
+## Métodos e Tipos Públicos
 
-`value: String`
+### Identificadores opacos (value classes)
 
-ID não vazio de uma conta.
-
-### `TransactionId`
-
-`value: String`
-
-ID não vazio de uma transação registrada no ledger.
-
-### `OperationId`
-
-`value: String`
-
-ID lógico de uma operação. Uma mesma operação pode possuir várias `Transaction`.
-
-### `LoanId`
-
-`value: String`
-
-ID não vazio de um empréstimo.
+- `AccountId(value: String)` — identificador de conta (não pode ser blank)
+- `TransactionId(value: String)` — identificador de transação commitada
+- `OperationId(value: String)` — identificador de operação lógica de alto nível
+- `LoanId(value: String)` — identificador de empréstimo
 
 ---
-
-# 2. Valores econômicos
 
 ### `Quantity`
 
-Quantidade decimal não negativa baseada em `BigDecimal`.
+**Propósito:**  
+Quantidade não-negativa de precisão arbitraria (usada tanto para dinheiro quanto para recursos). Nunca armazena valor
+negativo.
 
-Principais APIs:
+**Principais membros:**
 
-* `Quantity.ZERO`
-* `Quantity.of(BigDecimal)`
-* `Quantity.of(Long)`
-* `Quantity.of(String)`
-* `+`
-* `-`
-* `compareTo`
-* `isZero()`
-* `isPositive()`
+- `plus(other: Quantity) → Quantity`
+- `minus(other: Quantity) → Quantity` (lança se o resultado for negativo)
+- `compareTo(other: Quantity) → Int`
+- `isZero() → Boolean`
+- `isPositive() → Boolean`
 
-Subtração que produziria valor negativo lança `IllegalArgumentException`.
+**Factory (companion):**
 
-A igualdade ignora zeros finais do `BigDecimal`.
-
----
-
-### `Currency`
-
-`code: String`
-
-Identificador não vazio de moeda.
-
-A biblioteca trata moedas como identificadores opacos. Não existe conversão automática entre moedas.
+- `Quantity.ZERO`
+- `Quantity.of(value: BigDecimal)`
+- `Quantity.of(value: Long)`
+- `Quantity.of(value: String)`
 
 ---
 
-### `Money`
+### `Currency(code: String)`
 
-* `quantity: Quantity`
-* `currency: Currency`
-
-Valor monetário não negativo.
-
-Operações:
-
-* `+`
-* `-`
-* `compareTo`
-* `isZero()`
-* `isPositive()`
-
-`+`, `-` e comparação exigem a mesma moeda.
-
-Fábricas:
-
-* `Money.of(BigDecimal, Currency)`
-* `Money.of(Long, Currency)`
-* `Money.of(String, Currency)`
-* `Money.zero(Currency)`
+**Propósito:**  
+Código de moeda opaco. A biblioteca nunca converte automaticamente entre moedas.
 
 ---
 
-### `ResourceRef`
+### `Money(quantity: Quantity, currency: Currency)`
 
-* `type: String`
-* `id: String`
+**Propósito:**  
+Valor monetário (quantidade + moeda). Operações aritméticas e comparação só são permitidas entre a mesma moeda.
 
-Identificador de um recurso não monetário. Ambos não podem ser vazios.
+**Principais membros:**
 
----
+- `plus` / `minus` / `compareTo`
+- `isZero()` / `isPositive()`
 
-### `ResourceAmount`
+**Factory:**
 
-* `resource: ResourceRef`
-* `quantity: Quantity`
-
-Quantidade de um recurso específico.
-
-Operações:
-
-* `+`
-* `-`
-* `compareTo`
-* `isZero()`
-* `isPositive()`
-
-As operações exigem o mesmo `ResourceRef`.
-
-Fábricas:
-
-* `of(type, id, BigDecimal)`
-* `of(type, id, Long)`
-* `of(type, id, String)`
-* `of(resource, BigDecimal)`
-* `of(resource, Long)`
-* `of(resource, String)`
-* `zero(resource)`
+- `Money.of(amount: BigDecimal|Long|String, currency: Currency)`
+- `Money.zero(currency: Currency)`
 
 ---
 
-# 3. `EconomicValue`
+### `ResourceRef(type: String, id: String)`
 
-`sealed class`
-
-Representa genericamente um valor econômico.
-
-### `EconomicValue.Monetary`
-
-`money: Money`
-
-### `EconomicValue.Resource`
-
-`amount: ResourceAmount`
-
-Fábricas:
-
-* `EconomicValue.of(Money)`
-* `EconomicValue.of(ResourceAmount)`
+**Propósito:**  
+Referência opaca a um recurso não-monetário (ex.: `"sword"`, `"wood"`).
 
 ---
 
-# 4. `Balance`
+### `ResourceAmount(resource: ResourceRef, quantity: Quantity)`
 
-Snapshot imutável de uma conta.
+**Propósito:**  
+Quantidade de um recurso específico. Aritmética e comparação só entre o mesmo recurso.
 
-* `moneys: Map<Currency, Quantity>`
-* `resources: Map<ResourceRef, Quantity>`
-
-APIs:
-
-* `moneyOf(currency): Quantity`
-* `resourceOf(resource): Quantity`
-* `isEmpty()`
-
-Ausência no mapa significa quantidade zero.
-
-`Balance.EMPTY` representa saldo vazio.
+**Factory:** várias sobrecargas `of(...)` e `zero(resource)`.
 
 ---
 
-# 5. `Account`
+### `EconomicValue` (sealed)
 
-Conta econômica pertencente a uma `Economy`.
+**Propósito:**  
+Valor econômico unificado (dinheiro ou recurso).
 
-`id: AccountId`
+Subtipos:
 
-O construtor é `internal`: contas devem ser criadas por `Economy.createAccount`.
+- `Monetary(money: Money)`
+- `Resource(amount: ResourceAmount)`
 
-### API pública
-
-`balance(): Balance`
-
-Retorna snapshot imutável do saldo atual.
-
-A conta não expõe operações públicas de alteração de saldo. Toda mutação ocorre por operações da `Economy`.
+Factory: `EconomicValue.of(money)` / `EconomicValue.of(amount)`.
 
 ---
 
-# 6. Movimentações e operações
+### `Balance(moneys: Map<Currency, Quantity>, resources: Map<ResourceRef, Quantity>)`
 
-### `Movement`
+**Propósito:**  
+Snapshot imutável das holdings de uma conta.
 
-Movimento elementar de valor:
+Métodos:
 
-* `from: AccountId?`
-* `to: AccountId?`
-* `value: EconomicValue`
+- `moneyOf(currency) → Quantity`
+- `resourceOf(resource) → Quantity`
+- `isEmpty() → Boolean`
 
-Formas:
-
-* `from != null`, `to != null` → transferência;
-* `from == null`, `to != null` → emissão;
-* `from != null`, `to == null` → retirada.
-
-Não pode ter ambos nulos.
+Constante: `Balance.EMPTY`.
 
 ---
 
-### `Transfer`
+### `Account` (criado apenas via `Economy`)
 
-* `from: AccountId`
-* `to: AccountId`
-* `value: EconomicValue`
+**Propósito:**  
+Conta econômica mutável pertencente a uma única `Economy`. Estado encapsulado; código externo só obtém snapshots
+imutáveis via `balance()`.
 
-Descrição de uma transferência entre contas distintas.
+Método público:
 
----
-
-### `Exchange`
-
-`transfers: List<Transfer>`
-
-Exchange precisa conter pelo menos uma transferência.
-
-Todos os transfers são aplicados atomicamente.
+- `balance() → Balance`
 
 ---
 
-### `Charge`
+### `Movement(from: AccountId?, to: AccountId?, value: EconomicValue)`
 
-* `from`
-* `to`
-* `value`
+**Propósito:**  
+Movimento único de valor.
 
-Carga adicional anexada a `transfer` ou `exchange`.
-
-Pode representar taxa, imposto, comissão, penalidade etc.
-
----
-
-### `Transaction`
-
-Registro imutável de uma operação efetivamente commitada.
-
-* `id: TransactionId`
-* `operationId: OperationId`
-* `movements: List<Movement>`
-* `timestamp: Instant`
-
-Depois de registrada no ledger, não é modificada.
+- Transferência: ambos `from` e `to` presentes
+- Emissão: `from == null`
+- Aposentadoria: `to == null`
 
 ---
 
-# 7. Empréstimos
+### `Transaction(id, operationId, movements, timestamp)`
 
-### `LoanState`
-
-* `OPEN`
-* `PAID`
-* `DEFAULTED`
-
-### `Loan`
-
-* `id`
-* `creditor`
-* `debtor`
-* `principal: Money`
-* `interest: Money`
-* `dueDate: Instant`
-* `paid: Money`
-* `state: LoanState`
-
-APIs:
-
-`amountDue(): Money`
-
-Calcula:
-
-`principal + interest - paid`
-
-`isFullyPaid(): Boolean`
-
-Retorna `true` quando `paid >= principal + interest`.
+**Propósito:**  
+Registro imutável de uma operação econômica commitada no ledger.
 
 ---
 
-# 8. Eventos e observabilidade
+### `BalanceChange(accountId, previousBalance, newBalance)`
 
-A `Economy` expõe um sistema de eventos para que aplicações possam observar mudanças econômicas sem precisar consultar o
-estado repetidamente.
-
-Os eventos representam **fatos já ocorridos**. Eles somente são emitidos depois que a alteração correspondente foi
-efetivamente commitada.
-
-Os eventos são entregues de forma síncrona na thread que realizou a operação, mas somente depois da liberação do write
-lock.
-
-Falhas em listeners não desfazem nem invalidam uma operação econômica já commitada.
+**Propósito:**  
+Descrição imutável da mudança de saldo de uma conta após uma transação.
 
 ---
 
-## `BalanceChange`
+### `EconomyEvent` (sealed interface)
 
-Snapshot imutável de uma alteração de saldo.
+**Propósito:**  
+Fatos imutáveis emitidos após mudanças de estado bem-sucedidas.
 
-* `accountId: AccountId`
-* `previousBalance: Balance`
-* `newBalance: Balance`
+Subtipos:
 
-Representa a diferença entre o saldo anterior e o novo saldo de uma conta afetada por uma `Transaction`.
-
----
-
-## `EconomyEvent`
-
-`sealed interface`
-
-Tipo base de todos os eventos emitidos por uma `Economy`.
-
-### `EconomyEvent.AccountCreated`
-
-Emitido quando uma conta é criada.
-
-* `accountId: AccountId`
+- `AccountCreated(accountId)`
+- `TransactionCommitted(transaction, balanceChanges)`
+- `LoanCreated(loan, transaction)`
+- `LoanPaid(previousLoan, loan, transaction)`
+- `LoanDefaulted(previousLoan, loan)`
 
 ---
 
-### `EconomyEvent.TransactionCommitted`
+### `EconomyEventListener` (fun interface)
 
-Emitido quando uma `Transaction` é efetivamente registrada no ledger.
+**Propósito:**  
+Callback de observação de eventos.
 
-* `transaction: Transaction`
-* `balanceChanges: List<BalanceChange>`
-
-`balanceChanges` contém os snapshots anterior/novo das contas afetadas pela transação.
-
-Esse é o principal evento para observar movimentações econômicas.
-
-Ele cobre:
-
-* emissão;
-* retirada;
-* transferência;
-* exchange;
-* charges;
-* transferência de principal de empréstimo;
-* pagamentos de empréstimos.
+Método: `onEvent(event: EconomyEvent)`
 
 ---
 
-### `EconomyEvent.LoanCreated`
+### `EconomySubscription`
 
-Emitido quando um novo empréstimo é criado com sucesso.
+**Propósito:**  
+Handle de inscrição de eventos.
 
-* `loan: Loan`
-* `transaction: Transaction`
+Métodos:
 
-`transaction` é a transação que transferiu o principal do creditor para o debtor.
-
-Durante `createLoan`, os eventos são emitidos na ordem:
-
-1. `TransactionCommitted`
-2. `LoanCreated`
+- `unsubscribe()` (idempotente)
+- `isActive() → Boolean`
 
 ---
 
-### `EconomyEvent.LoanPaid`
+### `Transfer(from, to, value)`
 
-Emitido quando um pagamento de empréstimo é efetivamente realizado.
-
-* `previousLoan: Loan`
-* `loan: Loan`
-* `transaction: Transaction`
-
-`previousLoan` representa o empréstimo imediatamente antes do pagamento.
-
-`loan` representa o estado imediatamente depois do pagamento.
-
-`transaction` representa a transferência do pagamento entre debtor e creditor.
-
-Durante `payLoan`, os eventos são emitidos na ordem:
-
-1. `TransactionCommitted`
-2. `LoanPaid`
-
-Se o pagamento quitar completamente o empréstimo, `loan.state` será `PAID`.
+**Propósito:**  
+Descrição de uma transferência entre duas contas distintas.
 
 ---
 
-### `EconomyEvent.LoanDefaulted`
+### `Exchange(transfers: List<Transfer>)`
 
-Emitido quando um empréstimo `OPEN` é marcado como `DEFAULTED`.
-
-* `previousLoan: Loan`
-* `loan: Loan`
-
-Não há alteração de saldo nem `Transaction` associada ao default.
+**Propósito:**  
+Troca multi-perna atômica (todas as pernas validam e aplicam juntas).
 
 ---
 
-## `EconomyEventListener`
+### `Charge(from, to, value)`
 
-Observer funcional para receber eventos.
-
-API:
-
-`onEvent(event: EconomyEvent)`
-
-Pode ser usado para observar todos os eventos de uma `Economy`.
+**Propósito:**  
+Cargo adicional (taxa, imposto, comissão etc.) anexado a uma transferência ou troca.
 
 ---
 
-## `EconomySubscription`
+### `LoanState` (enum)
 
-Handle retornado por uma inscrição de eventos.
-
-### `unsubscribe()`
-
-Remove a inscrição.
-
-É idempotente: chamar mais de uma vez não produz efeito adicional.
-
-### `isActive(): Boolean`
-
-Retorna `true` enquanto a inscrição estiver registrada.
+Valores: `OPEN`, `PAID`, `DEFAULTED`.
 
 ---
 
-# 9. `Economy`
+### `Loan(...)`
 
-Núcleo da biblioteca.
+**Propósito:**  
+Obrigação financeira entre credor e devedor.
 
-É **thread-safe** e todas as operações mutáveis são atômicas para a instância inteira.
+Propriedades: `id`, `creditor`, `debtor`, `principal`, `interest`, `dueDate`, `paid`, `state`.
 
-Leitores podem executar concorrentemente; escritores usam acesso exclusivo.
+Métodos:
 
-Cada `Economy` é totalmente independente das demais.
-
----
-
-## Observação de eventos
-
-`subscribe(listener: EconomyEventListener): EconomySubscription`
-
-Registra um listener para todos os eventos da `Economy`.
-
-Os eventos são entregues na ordem de registro dos listeners.
-
-Exemplo conceitual:
-
-`economy.subscribe { event -> ... }`
+- `amountDue() → Money`
+- `isFullyPaid() → Boolean`
 
 ---
 
-`subscribe<E : EconomyEvent>(listener: (E) -> Unit): EconomySubscription`
+### `Economy`
 
-Registra um listener somente para um tipo específico de `EconomyEvent`.
+**Propósito:**  
+Motor econômico central, thread-safe e em memória.
 
-Permite observar diretamente, por exemplo:
+#### Observação de eventos
 
-* `EconomyEvent.AccountCreated`
-* `EconomyEvent.TransactionCommitted`
-* `EconomyEvent.LoanCreated`
-* `EconomyEvent.LoanPaid`
-* `EconomyEvent.LoanDefaulted`
+| Método         | Assinatura                                               | Propósito                               |
+|----------------|----------------------------------------------------------|-----------------------------------------|
+| `subscribe`    | `(listener: EconomyEventListener) → EconomySubscription` | Inscreve em todos os eventos            |
+| `subscribe<E>` | `(listener: (E) → Unit) → EconomySubscription`           | Inscreve apenas em um subtipo de evento |
 
-O retorno é um `EconomySubscription`, que pode ser usado para cancelar a observação.
+#### Contas
 
----
+| Método          | Assinatura                           | Propósito                   |
+|-----------------|--------------------------------------|-----------------------------|
+| `createAccount` | `(id: AccountId) → Account`          | Cria conta vazia            |
+| `getAccount`    | `(id: AccountId) → Account?`         | Obtém conta                 |
+| `accountExists` | `(id: AccountId) → Boolean`          | Verifica existência         |
+| `accountIds`    | `() → Set<AccountId>`                | Todos os ids de conta       |
+| `accounts`      | `() → List<AccountId>`               | Lista de ids de conta       |
+| `balanceOf`     | `(id: AccountId) → Balance`          | Snapshot de saldo           |
+| `balances`      | `() → Map<AccountId, Balance>`       | Todos os saldos             |
+| `currencies`    | `() → Set<Currency>`                 | Todas as moedas presentes   |
+| `currenciesOf`  | `(id: AccountId) → Set<Currency>`    | Moedas de uma conta         |
+| `resources`     | `() → Set<ResourceRef>`              | Todos os recursos presentes |
+| `resourcesOf`   | `(id: AccountId) → Set<ResourceRef>` | Recursos de uma conta       |
 
-## Contas
+#### Ledger
 
-`createAccount(id): Account`
+| Método                    | Assinatura                                       | Propósito                         |
+|---------------------------|--------------------------------------------------|-----------------------------------|
+| `ledgerHistory`           | `() → List<Transaction>`                         | Histórico completo                |
+| `ledgerSize`              | `() → Int`                                       | Número de transações              |
+| `getTransaction`          | `(id: TransactionId) → Transaction?`             | Busca por id                      |
+| `transactionsByOperation` | `(operationId: OperationId) → List<Transaction>` | Transações de uma operação lógica |
 
-Cria conta vazia.
+#### Empréstimos (consulta)
 
-ID duplicado → `IllegalArgumentException`.
+| Método         | Assinatura                            | Propósito                |
+|----------------|---------------------------------------|--------------------------|
+| `getLoan`      | `(id: LoanId) → Loan?`                | Busca empréstimo         |
+| `loanExists`   | `(id: LoanId) → Boolean`              | Verifica existência      |
+| `loansOf`      | `(accountId: AccountId) → List<Loan>` | Empréstimos de uma conta |
+| `allLoans`     | `() → List<Loan>`                     | Todos os empréstimos     |
+| `loansByState` | `(state: LoanState) → List<Loan>`     | Filtra por estado        |
 
-Em caso de sucesso, emite:
+#### Operações econômicas (mutadoras, atômicas)
 
-`EconomyEvent.AccountCreated`
-
-`getAccount(id): Account?`
-
-`accountExists(id): Boolean`
-
-`accountIds(): Set<AccountId>`
-
-`accounts(): List<AccountId>`
-
-`balanceOf(id): Balance`
-
-Conta inexistente → `IllegalArgumentException`.
-
-`balances(): Map<AccountId, Balance>`
-
-Snapshot dos saldos de todas as contas.
-
----
-
-## Moedas e recursos
-
-`currencies(): Set<Currency>`
-
-Todas as moedas presentes em alguma conta.
-
-`currenciesOf(id): Set<Currency>`
-
-Moedas de uma conta específica.
-
-Conta inexistente → `IllegalArgumentException`.
-
-`resources(): Set<ResourceRef>`
-
-Todos os recursos presentes em alguma conta.
-
-`resourcesOf(id): Set<ResourceRef>`
-
-Recursos de uma conta específica.
-
-Conta inexistente → `IllegalArgumentException`.
+| Método        | Assinatura                                                                | Propósito                               |
+|---------------|---------------------------------------------------------------------------|-----------------------------------------|
+| `issue`       | `(to: AccountId, value: EconomicValue) → Transaction`                     | Cria valor em uma conta                 |
+| `retire`      | `(from: AccountId, value: EconomicValue) → Transaction`                   | Destrói valor de uma conta              |
+| `transfer`    | `(transfer: Transfer, charges: List<Charge> = emptyList()) → Transaction` | Transferência + cargos opcionais        |
+| `exchange`    | `(exchange: Exchange, charges: List<Charge> = emptyList()) → Transaction` | Troca multi-perna + cargos              |
+| `createLoan`  | `(creditor, debtor, principal, interest, dueDate) → Loan`                 | Cria empréstimo e transfere o principal |
+| `payLoan`     | `(loanId: LoanId, amount: Money) → Loan`                                  | Aplica pagamento a um empréstimo aberto |
+| `defaultLoan` | `(loanId: LoanId) → Loan`                                                 | Marca empréstimo como defaulted         |
 
 ---
 
-# 10. Ledger
+### `Interest` (object)
 
-O ledger é append-only.
+**Propósito:**  
+Utilitários puros de cálculo de juros (não tocam estado).
 
-### `ledgerHistory(): List<Transaction>`
+Métodos:
 
-Histórico completo.
-
-### `ledgerSize(): Int`
-
-Número de transações commitadas.
-
-### `getTransaction(id): Transaction?`
-
-Busca por ID.
-
-### `transactionsByOperation(operationId): List<Transaction>`
-
-Retorna as transações pertencentes à mesma `OperationId`.
-
-Toda `Transaction` efetivamente commitada gera:
-
-`EconomyEvent.TransactionCommitted`
+- `simple(principal: Money, rate: Quantity, periods: Int) → Money`  
+  Fórmula: `principal × rate × periods`
+- `compound(principal: Money, rate: Quantity, periods: Int) → Money`  
+  Fórmula: `principal × ((1 + rate)^periods − 1)`
 
 ---
 
-# 11. Emissão e retirada
-
-### `issue(to, value): Transaction`
-
-Cria valor:
-
-`null → account`
-
-A quantidade precisa ser não negativa.
-
-Gera automaticamente:
-
-* `OperationId`
-* `TransactionId`
-* timestamp com `Instant.now()`
-
-É atômico.
-
-Após o commit, emite:
-
-`EconomyEvent.TransactionCommitted`
-
----
-
-### `retire(from, value): Transaction`
-
-Destrói valor:
-
-`account → null`
-
-Exige saldo/recurso suficiente.
-
-É atômico.
-
-Após o commit, emite:
-
-`EconomyEvent.TransactionCommitted`
-
----
-
-# 12. Transferência
-
-### `transfer(transfer, charges = emptyList()): Transaction`
-
-Executa:
-
-* transferência principal;
-* todas as charges.
-
-Tudo pertence à **mesma `Transaction`** e é aplicado atomicamente.
-
-Valida:
-
-* contas existentes;
-* contas de origem e destino diferentes;
-* valores não negativos;
-* saldo suficiente para todos os débitos.
-
-Falha em qualquer validação → nenhuma alteração de saldo e nenhum evento de sucesso.
-
-Após o commit, emite:
-
-`EconomyEvent.TransactionCommitted`
-
----
-
-# 13. Exchange
-
-### `exchange(exchange, charges = emptyList()): Transaction`
-
-Executa múltiplas transferências e charges como uma única operação atômica.
-
-Todas as movimentações são validadas antes da aplicação.
-
-Falha em qualquer etapa → nenhum saldo é alterado e nenhum evento de sucesso é emitido.
-
-A ordem dos `Movement` na `Transaction` é:
-
-1. transfers do `Exchange`;
-2. charges.
-
-Após o commit, emite:
-
-`EconomyEvent.TransactionCommitted`
-
----
-
-# 14. Empréstimos
-
-### `createLoan(...)`
-
-Parâmetros:
-
-* `creditor`
-* `debtor`
-* `principal: Money`
-* `interest: Money`
-* `dueDate`
-
-Regras:
-
-* creditor ≠ debtor;
-* ambas as contas existem;
-* principal e interest usam a mesma moeda;
-* principal > 0;
-* interest ≥ 0.
-
-Ao criar:
-
-1. principal é transferido de creditor para debtor;
-2. loan é criado como `OPEN`;
-3. `paid` começa em zero.
-
-A transferência do principal gera uma `Transaction` normal no ledger.
-
-Eventos emitidos, nesta ordem:
-
-1. `EconomyEvent.TransactionCommitted`
-2. `EconomyEvent.LoanCreated`
-
-`LoanCreated.transaction` referencia a `Transaction` responsável pela transferência do principal.
-
----
-
-### `getLoan(id): Loan?`
-
-### `loanExists(id): Boolean`
-
-### `loansOf(accountId): List<Loan>`
-
-Retorna empréstimos onde a conta é creditor ou debtor.
-
-### `allLoans(): List<Loan>`
-
-Todos os empréstimos.
-
-### `loansByState(state): List<Loan>`
-
-Filtra por estado.
-
----
-
-### `payLoan(loanId, amount): Loan`
-
-Pagamento de empréstimo aberto.
-
-O pagamento é uma transferência normal:
-
-`debtor → creditor`
-
-Regras:
-
-* loan existe;
-* loan está `OPEN`;
-* moeda coincide;
-* valor > 0;
-* pagamento não pode exceder `amountDue()`.
-
-Depois do pagamento:
-
-* se totalmente quitado → `PAID`;
-* caso contrário → permanece `OPEN`.
-
-Eventos emitidos, nesta ordem:
-
-1. `EconomyEvent.TransactionCommitted`
-2. `EconomyEvent.LoanPaid`
-
-`LoanPaid` fornece tanto o estado anterior quanto o estado atualizado do empréstimo.
-
----
-
-### `defaultLoan(loanId): Loan`
-
-Marca empréstimo `OPEN` como `DEFAULTED`.
-
-Não altera saldos.
-
-Não cria `Transaction`.
-
-Após a alteração, emite:
-
-`EconomyEvent.LoanDefaulted`
-
-As consequências econômicas de um default ficam por conta da aplicação.
-
----
-
-# 15. Juros
-
-### `Interest`
-
-Objeto utilitário puro.
-
-Não modifica contas, loans ou ledger.
-
-Também não produz eventos.
-
-### `Interest.simple(principal, rate, periods): Money`
-
-Fórmula:
-
-`principal × rate × periods`
-
-Regras:
-
-* `periods >= 0`;
-* `rate` não é negativo;
-* resultado usa a mesma moeda do principal.
-
-Retorna zero quando:
-
-* periods = 0;
-* principal = 0;
-* rate = 0.
-
-### `Interest.compound(principal, rate, periods): Money`
-
-Fórmula:
-
-`principal × ((1 + rate)^periods − 1)`
-
-Regras:
-
-* `periods >= 0`;
-* rate não é negativo;
-* mesma moeda do principal.
-
-Retorna zero para `periods = 0` ou principal zero.
-
----
-
-# 16. Atomicidade e eventos
-
-Toda operação mutável da `Economy` é atômica em relação à instância inteira.
-
-O mecanismo:
-
-1. valida todas as movimentações;
-2. calcula saldos projetados;
-3. altera as contas;
-4. adiciona a `Transaction` ao ledger;
-5. atualiza outras entidades necessárias, como `Loan`;
-6. libera o write lock;
-7. somente então publica os eventos correspondentes.
-
-Portanto:
-
-* nenhum evento de sucesso é emitido para uma operação que falhou;
-* listeners nunca observam um estado parcialmente commitado;
-* uma exceção em um listener não desfaz a operação econômica;
-* eventos são fatos posteriores à mudança, não parte da transação econômica.
-
----
-
-# 17. Modelo mental rápido
-
-### Valor
-
-`Quantity → Money / ResourceAmount → EconomicValue`
-
-### Conta
-
-`Account → Balance`
-
-### Movimento
-
-`Movement`
-
-### Operação
-
-`Transfer / Exchange / Charge`
-
-### Registro
-
-`Transaction → Ledger`
-
-### Observabilidade
-
-`Economy → EconomyEvent → EconomyEventListener`
-
-### Mudança de saldo
-
-`BalanceChange`
-
-### Inscrição
-
-`subscribe() → EconomySubscription`
-
-### Crédito
-
-`issue`
-
-### Destruição
-
-`retire`
-
-### Transferência
-
-`transfer`
-
-### Operação multi-leg
-
-`exchange`
-
-### Crédito parcelado / obrigação
-
-`Loan`
-
-### Cálculo financeiro
-
-`Interest`
-
-### Regra central
-
-**A aplicação define o significado econômico; `Economy` garante armazenamento, validação, atomicidade, concorrência,
-histórico e observabilidade.**
+## Como Usar
+
+1. **Crie a economia e as contas:**
+   ```kotlin
+   val economy = Economy()
+   val alice = AccountId("alice")
+   val bob   = AccountId("bob")
+   economy.createAccount(alice)
+   economy.createAccount(bob)
+   ```
+
+2. **Emita valor (crie dinheiro ou recursos):**
+   ```kotlin
+   val gold = Currency("GOLD")
+   economy.issue(alice, EconomicValue.of(Money.of(1000, gold)))
+   ```
+
+3. **Transfira valor (com ou sem taxa):**
+   ```kotlin
+   val fee = Charge(
+     from = alice,
+     to = AccountId("treasury"),
+     value = EconomicValue.of(Money.of(10, gold))
+   )
+   economy.transfer(
+     Transfer(from = alice, to = bob, value = EconomicValue.of(Money.of(200, gold))),
+     charges = listOf(fee)
+   )
+   ```
+
+4. **Troca multi-perna (ex.: item por dinheiro):**
+   ```kotlin
+   val sword = ResourceRef("item", "sword-1")
+   economy.exchange(
+     Exchange(listOf(
+       Transfer(bob, alice, EconomicValue.of(ResourceAmount.of(sword, 1))),
+       Transfer(alice, bob, EconomicValue.of(Money.of(150, gold)))
+     ))
+   )
+   ```
+
+5. **Empréstimos:**
+   ```kotlin
+   val loan = economy.createLoan(
+     creditor = alice,
+     debtor = bob,
+     principal = Money.of(500, gold),
+     interest = Money.of(50, gold),
+     dueDate = Instant.now().plusSeconds(86400 * 30)
+   )
+   economy.payLoan(loan.id, Money.of(200, gold))
+   // ...
+   economy.defaultLoan(loan.id) // se necessário
+   ```
+
+6. **Observe eventos:**
+   ```kotlin
+   val sub = economy.subscribe<EconomyEvent.TransactionCommitted> { event ->
+     println("Tx ${event.transaction.id} commitada")
+   }
+   // ...
+   sub.unsubscribe()
+   ```
+
+7. **Consulte saldos e histórico:**
+   ```kotlin
+   val balance = economy.balanceOf(alice)
+   val history = economy.ledgerHistory()
+   ```
+
+Todas as operações mutadoras são atômicas: ou a transação inteira (incluindo cargos) é aplicada e registrada no ledger,
+ou nenhuma mudança de estado ocorre. Eventos são publicados somente após o commit e fora do lock de escrita.
